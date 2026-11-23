@@ -1,160 +1,140 @@
-# Backlink Manager (GitHub-Backed Google Sheets Alternative)
+# Backlink Manager (Google Sheets-Style Multi-Spreadsheet Platform)
 
-A production-ready web application designed to replace Google Sheets backlink trackers. Built with Next.js App Router, TypeScript, and Tailwind CSS, Backlink Manager delivers the look, feel, and keyboard navigation of Google Sheets while persisting all backlink records directly to your GitHub repository (`arsal73500-beep/Spreadsheet`).
-
----
-
-## 🚀 Key Features
-
-- **Google Sheets-Style Interface**: Sticky column headers, row numbers (1, 2, 3...), active cell highlight with formula bar, in-cell editing, dropdown selectors, keyboard navigation (Arrow keys, Enter, Tab, Esc), and column visibility toggle.
-- **GitHub Persistent Storage**: Stores records as versioned JSON files directly in GitHub via REST API commits (`@octokit/rest`).
-- **Conflict Prevention & Autosave**: Debounced auto-save with SHA comparison prevents overwriting newer remote repository versions.
-- **Project Isolation**: Three strictly segregated projects:
-  - **MD Health Center** (`data/md-health-center/backlinks.json`)
-  - **AINT Foundation** (`data/aint-foundation/backlinks.json`)
-  - **Dr Irshad Malik** (`data/dr-irshad-malik/backlinks.json`)
-- **Role-Based Access Control (RBAC)**:
-  - **Administrator**: Full access, add/edit/delete rows, manage team, configure repository.
-  - **Editor**: Add & edit records, update statuses, import CSV.
-  - **Viewer**: Read-only, search, filter, export CSV.
-- **Google Sheets CSV Migration**: Import CSV files with auto column detection, interactive mapping, live preview, and duplicate prevention.
-- **Real-Time Analytics Dashboard**: Real-time stats calculated from stored records (Live, Pending, Submitted, Broken, Referring Domains, Average DR, Average DA, Category & Anchor distributions).
-- **ChatGPT & Automated SEO APIs**: Ready-to-use REST endpoints (`/api/projects/[id]/research`) for external AI crawlers and metric providers (Ahrefs, Moz, DataForSEO).
+A production-grade multi-spreadsheet application with the look, feel, and keyboard navigation of Google Sheets, backed by persistent GitHub repository storage (`arsal73500-beep/Spreadsheet`).
 
 ---
 
-## 📁 Repository Directory Structure
+## 💻 How to Open and Run on Your Laptop
 
+### Quick Start (3 Steps)
+
+1. **Open PowerShell or Terminal** in the project folder:
+   ```powershell
+   cd D:\laragon\www\Spreadsheet
+   ```
+
+2. **Start the Development Server**:
+   ```powershell
+   npm run dev
+   ```
+
+3. **Open Your Browser**:
+   Open Google Chrome, Microsoft Edge, or Firefox and go to:
+   ```
+   http://localhost:3000
+   ```
+
+*(Optional) Create a Desktop Shortcut:*
+Right-click your Desktop → **New** → **Shortcut** → Enter `http://localhost:3000` → Name it **"Backlink Manager"**.
+
+---
+
+## 🌟 What's New: Multi-Spreadsheet Manager
+
+### 1. Google Sheets Home Dashboard (`/`)
+- **Spreadsheet Icon & Home Navigation**: Browse all your spreadsheets in one unified view.
+- **Create New Spreadsheet**: Start with `+ Blank spreadsheet` or choose from pre-built templates (`Backlink Tracker`, `Local Citations`, `Healthcare Outreach`).
+- **Client Workspaces**:
+  - **MD Health Center**: Multiple spreadsheets (e.g. *Backlink Tracker*, *Local Citations*, *High Authority Directories*).
+  - **AINT Foundation**: Multiple spreadsheets (e.g. *Backlink Tracker*, *Mental Health Directories*).
+  - **Dr. Irshad Malik**: Multiple spreadsheets (e.g. *Backlink Tracker*, *Healthcare Outreach*).
+  - **General / Personal**: Standalone spreadsheets not tied to any client.
+- **Spreadsheet Lifecycle**:
+  - Open, Rename inline or via dialog, Duplicate, Star / Favourite, Archive / Restore, and Delete with confirmation.
+- **Search & Sort**: Filter across all spreadsheets by name, workspace, or owner; sort by Last Modified, Date Created, or Title.
+
+### 2. Google Sheets Editor (`/sheets/[spreadsheetId]`)
+- **Permanent Unique IDs**: Every spreadsheet has its own isolated ID (e.g. `sheet_1795...`) and separate storage file.
+- **Inline Title Renaming**: Click the title to edit directly like in Google Sheets.
+- **Back to Spreadsheets**: Return to the dashboard at any time.
+- **Google Sheets Features**:
+  - Sticky numbered rows (`1, 2, 3...`) and lettered column headers (`A, B, C...`).
+  - Active cell bounding box with Google Sheets blue border and drag handle.
+  - Formula Bar with coordinate display (`fx` and active cell address like `B4`).
+  - Keyboard navigation (Arrow keys, Enter, Tab, Esc, Delete).
+  - Undo (`Ctrl+Z`) and Redo (`Ctrl+Y`) stacks.
+  - Multi-field filters & column visibility toggles.
+  - Full CSV Import wizard with preview and CSV Export.
+
+### 3. Real-Time GitHub Persistence
+- Automatic background saving with debounced commits.
+- Commit status badges: `Saved locally`, `Syncing to GitHub...`, `Synced to GitHub`, `Sync failed`, and `Retry`.
+- SHA conflict detection prevents accidental overwrites when remote repository changes.
+- Dual storage engine: Seamlessly falls back to local JSON cache when working offline or before GitHub token is configured.
+
+### 4. Authentication & Role Permissions
+- Dedicated `/login` and `/register` pages with Auth.js / NextAuth.
+- Authentication options:
+  - **Continue with Google**
+  - **Continue with GitHub**
+  - **Continue with Vercel**
+  - **Email and Password**
+  - **Instant Test Role Sign In** (Admin, Editor, Viewer) for immediate testing.
+- Strict Role-Based Access Control (RBAC):
+  - **Administrator**: Full access, create/delete spreadsheets, edit all data, manage GitHub settings.
+  - **Editor**: View spreadsheets, add/edit records, import/export data.
+  - **Viewer**: Read-only access, search, filter, export CSV.
+
+### 5. Scalable Repository Directory Structure
 ```
-Backlink-Manager/
-├── data/
-│   ├── md-health-center/
-│   │   └── backlinks.json        # MD Health Center backlink data
-│   ├── aint-foundation/
-│   │   └── backlinks.json        # AINT Foundation CIC backlink data
-│   └── dr-irshad-malik/
-│       └── backlinks.json        # Dr Irshad Malik backlink data
-├── schemas/
-│   └── backlink-schema.json      # JSON Schema definition
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── projects/         # REST API routes (GET, POST, PATCH, DELETE, bulk, history, research)
-│   │   ├── globals.css           # Google Sheets CSS styling
-│   │   ├── layout.tsx
-│   │   └── page.tsx              # Main spreadsheet workspace
-│   ├── components/
-│   │   ├── navigation/           # TopNav & ProjectTabs
-│   │   ├── spreadsheet/          # SpreadsheetGrid, Toolbar, FormulaBar
-│   │   ├── dialogs/              # CsvImportModal, SettingsModal, FilterModal
-│   │   ├── dashboard/            # MetricsDashboard
-│   │   └── api-docs/             # Interactive API explorer
-│   └── lib/
-│       ├── schema.ts             # Zod schema & TypeScript definitions
-│       ├── github.ts             # GitHub REST API client & SHA conflict logic
-│       ├── storage.ts            # Dual storage engine (GitHub + local file cache)
-│       ├── auth.ts               # User roles & permissions
-│       ├── csv-parser.ts         # CSV parsing, mapping, and duplicate check
-│       └── projects-config.ts    # Project metadata & isolation config
-├── .env.example
-├── README.md
-├── package.json
-└── tailwind.config.ts
+data/
+├── workspaces/
+│   └── workspaces.json           # Definitions for client workspaces
+├── spreadsheets/
+│   ├── [spreadsheet-id]/
+│   │   ├── metadata.json         # Title, client, owner, dates, star, archive
+│   │   ├── backlinks.json        # Individual spreadsheet records
+│   │   └── settings.json         # Column visibility, sorting, preferences
+└── schemas/
+    └── backlink-schema.json
 ```
 
 ---
 
-## 🛠️ Local Development Setup
+## 🤖 ChatGPT & SEO Automation REST APIs
 
-### 1. Prerequisites
-- Node.js (v18.17+ or v20+)
-- npm or pnpm
+Automated SEO workflows can create spreadsheets, read data, and append researched opportunities:
 
-### 2. Installation
-```bash
-git clone https://github.com/arsal73500-beep/Spreadsheet.git
-cd Spreadsheet
-npm install
-```
-
-### 3. Environment Variables
-Copy `.env.example` to `.env.local`:
-```bash
-cp .env.example .env.local
-```
-
-Configure your GitHub Personal Access Token in `.env.local`:
-```env
-GITHUB_TOKEN=ghp_yourPersonalAccessTokenHere
-GITHUB_OWNER=arsal73500-beep
-GITHUB_REPO=Spreadsheet
-GITHUB_BRANCH=main
-```
-
-> **Note**: If `GITHUB_TOKEN` is not yet configured, the application automatically uses the local repository cache (`data/*`) so you can run and test immediately offline.
-
-### 4. Start Development Server
-```bash
-npm run dev
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+- `GET /api/workspaces` — List workspaces with spreadsheet counts
+- `GET /api/spreadsheets` — List spreadsheets (supports `workspaceId`, `starred`, `archived`, `search`)
+- `POST /api/spreadsheets` — Create a new spreadsheet
+- `GET /api/spreadsheets/[id]` — Read metadata & backlink records
+- `PATCH /api/spreadsheets/[id]` — Rename, star, or archive spreadsheet
+- `DELETE /api/spreadsheets/[id]` — Delete spreadsheet
+- `POST /api/spreadsheets/[id]/duplicate` — Duplicate spreadsheet
+- `POST /api/spreadsheets/[id]/records` — Batch update / auto-save records
+- `POST /api/spreadsheets/[id]/research` — ChatGPT opportunity injection:
+  ```bash
+  curl -X POST http://localhost:3000/api/spreadsheets/sheet_md_backlinks_01/research \
+    -H "Content-Type: application/json" \
+    -H "x-user-role: admin" \
+    -d '{
+      "domain": "medicalnewsbulletin.com",
+      "dr": 85,
+      "da": 79,
+      "organicTraffic": 820000,
+      "category": "Guest Post",
+      "notes": "Researched via ChatGPT crawler"
+    }'
+  ```
 
 ---
 
-## ☁️ Production Deployment on Vercel
+## ☁️ Vercel Deployment
 
-1. Push your repository to GitHub:
+1. Push your changes to GitHub:
    ```bash
    git add .
-   git commit -m "feat: complete Google Sheets Backlink Manager application"
+   git commit -m "feat: complete Google Sheets Multi-Spreadsheet platform"
    git push origin main
    ```
-2. Log in to [Vercel](https://vercel.com) and click **"Add New Project"**.
-3. Import the `arsal73500-beep/Spreadsheet` repository.
-4. Under **Environment Variables**, add:
-   - `GITHUB_TOKEN`: Your GitHub token with `repo` permission.
+2. Import `arsal73500-beep/Spreadsheet` into [Vercel](https://vercel.com).
+3. Set Environment Variables:
+   - `GITHUB_TOKEN`: Your GitHub Personal Access Token (with `repo` scope).
    - `GITHUB_OWNER`: `arsal73500-beep`
    - `GITHUB_REPO`: `Spreadsheet`
    - `GITHUB_BRANCH`: `main`
-5. Click **Deploy**. Vercel will build and deploy the application.
-
----
-
-## 🤖 ChatGPT & SEO Automation Endpoints
-
-The application provides dedicated REST endpoints for automated backlink discovery, metrics enrichment, and status updates:
-
-### Add / Update Research Opportunity
-```http
-POST /api/projects/{projectId}/research
-Content-Type: application/json
-x-user-role: admin
-
-{
-  "domain": "forbes.com",
-  "backlinkUrl": "https://forbes.com/health-feature",
-  "dr": 94,
-  "da": 91,
-  "organicTraffic": 3500000,
-  "category": "Guest Post",
-  "notes": "Researched via ChatGPT crawler"
-}
-```
-
-### Available Endpoints
-- `GET /api/projects` - List projects with summary counts
-- `GET /api/projects/[id]/backlinks` - Fetch project backlinks and SHA
-- `POST /api/projects/[id]/backlinks` - Add new backlink
-- `PATCH /api/projects/[id]/backlinks/[recordId]` - Update cell/record
-- `DELETE /api/projects/[id]/backlinks/[recordId]` - Delete backlink
-- `POST /api/projects/[id]/backlinks/bulk` - Batch update / save grid
-- `GET /api/projects/[id]/history` - View GitHub commit log
-
----
-
-## 🛡️ Security & Data Integrity
-
-- **Server-Side Token Isolation**: GitHub tokens are never exposed in client bundles or public API responses.
-- **SHA Conflict Detection**: GitHub commit SHA is checked before every write. If concurrent edits occur, the user is notified with an explicit conflict warning.
-- **Input Validation**: All payloads validated with Zod schemas.
-- **Version Recovery**: Every update creates a descriptive Git commit, preserving full rollback history in GitHub.
+   - `AUTH_SECRET`: A secure random secret string.
+   - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` *(optional for Google OAuth)*
+   - `GITHUB_ID` / `GITHUB_SECRET` *(optional for GitHub OAuth)*
+4. Click **Deploy**.
