@@ -8,7 +8,7 @@ export async function POST(
   { params }: { params: { projectId: string } }
 ) {
   const { projectId } = params;
-  const access = validateProjectAccess(projectId, req, "canEdit");
+  const access = await validateProjectAccess(projectId, req, "canEdit");
   if (!access.authorized) return access.errorResponse!;
 
   try {

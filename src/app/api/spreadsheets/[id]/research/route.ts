@@ -9,14 +9,8 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canAdd")) {
-    return NextResponse.json(
-      { error: "Forbidden: Viewer role cannot add research records." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canAdd");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const body = await req.json();
@@ -36,7 +30,7 @@ export async function POST(
       notes,
     } = body;
 
-    const { records: existing, sha, metadata } = await getSpreadsheet(id, customToken);
+    const { records: existing, sha, metadata } = await getSpreadsheet(id, auth.customToken);
 
     const targetDomain = domain || (backlinkUrl ? extractDomainFromUrl(backlinkUrl) : null);
     if (!targetDomain) {
@@ -100,7 +94,7 @@ export async function POST(
       updatedRecords,
       sha,
       commitMsg,
-      customToken
+      auth.customToken
     );
 
     return NextResponse.json({

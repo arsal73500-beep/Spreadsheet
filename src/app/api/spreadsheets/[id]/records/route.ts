@@ -9,14 +9,8 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canEdit")) {
-    return NextResponse.json(
-      { error: "Forbidden: Viewer role cannot edit spreadsheet records." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canEdit");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const body = await req.json();
@@ -55,7 +49,7 @@ export async function POST(
 
     // Conflict detection if baseSha is supplied
     if (baseSha && !baseSha.startsWith("local-")) {
-      const current = await getSpreadsheet(id, customToken);
+      const current = await getSpreadsheet(id, auth.customToken);
       if (current.sha && current.sha !== baseSha && !current.sha.startsWith("local-")) {
         return NextResponse.json(
           {
@@ -71,7 +65,7 @@ export async function POST(
 
     let finalRecords = validatedRecords;
     if (mode === "append") {
-      const current = await getSpreadsheet(id, customToken);
+      const current = await getSpreadsheet(id, auth.customToken);
       const existingUrls = new Set(
         current.records.map((r) => r.backlinkUrl?.toLowerCase().trim())
       );
@@ -86,7 +80,7 @@ export async function POST(
       finalRecords,
       baseSha,
       commitMessage,
-      customToken
+      auth.customToken
     );
 
     return NextResponse.json({

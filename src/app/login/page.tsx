@@ -1,29 +1,52 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
+import React, { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn, useSession } from "next-auth/react";
 import {
   Table2,
   Lock,
   Mail,
-  Shield,
   ArrowRight,
   AlertCircle,
-  CheckCircle2,
-  Github,
-  Check,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import { UserRole } from "@/lib/auth";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { data: session, status } = useSession();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [selectedRole, setSelectedRole] = useState<UserRole>("admin");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (status === "authenticated" && session) {
+      router.push("/");
+    }
+  }, [status, session, router]);
+
+  // Check for NextAuth error query param
+  useEffect(() => {
+    const error = searchParams.get("error");
+    if (error) {
+      if (error === "OAuthSignin" || error === "OAuthCallback") {
+        setErrorMsg(
+          "Google OAuth is not configured on this environment. Ensure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set in your environment / Vercel."
+        );
+      } else if (error === "AccessDenied") {
+        setErrorMsg("Access was denied. Please use an authorized account.");
+      } else if (error === "CredentialsSignin") {
+        setErrorMsg("Invalid email or password. Please verify your credentials.");
+      } else {
+        setErrorMsg(`Authentication error: ${error}`);
+      }
+    }
+  }, [searchParams]);
 
   const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,9 +60,9 @@ export default function LoginPage() {
     try {
       const res = await signIn("credentials", {
         redirect: false,
-        email,
+        email: email.trim().toLowerCase(),
         password,
-        role: selectedRole,
+        callbackUrl: "/",
       });
 
       if (res?.error) {
@@ -55,47 +78,24 @@ export default function LoginPage() {
     }
   };
 
-  const handleOAuthLogin = async (provider: string) => {
+  const handleGoogleLogin = async () => {
     setLoading(true);
     setErrorMsg("");
     try {
-      await signIn(provider, { callbackUrl: "/" });
+      await signIn("google", { callbackUrl: "/" });
     } catch (err: any) {
-      setErrorMsg(`Could not connect to ${provider}. Please check configuration.`);
+      setErrorMsg(err.message || "Could not initialize Google authentication.");
       setLoading(false);
     }
   };
 
-  const handleQuickRoleLogin = async (role: UserRole) => {
-    setLoading(true);
-    setErrorMsg("");
-    const roleEmail =
-      role === "admin"
-        ? "admin@backlinkmanager.com"
-        : role === "editor"
-        ? "editor@backlinkmanager.com"
-        : "viewer@backlinkmanager.com";
-
-    try {
-      const res = await signIn("credentials", {
-        redirect: false,
-        email: roleEmail,
-        password: "demo-password",
-        role,
-      });
-
-      if (res?.error) {
-        setErrorMsg(res.error);
-      } else {
-        router.push("/");
-        router.refresh();
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#f8f9fa]">
+        <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-[#f8f9fa] p-4 text-xs select-none">
@@ -115,21 +115,20 @@ export default function LoginPage() {
 
         <div className="p-6 space-y-5">
           {errorMsg && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{errorMsg}</span>
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="leading-snug">{errorMsg}</span>
             </div>
           )}
 
-          {/* Social / OAuth Providers */}
-          <div className="space-y-2">
-            {/* Google */}
+          {/* Real Google OAuth Login */}
+          <div>
             <button
-              onClick={() => handleOAuthLogin("google")}
+              onClick={handleGoogleLogin}
               disabled={loading}
-              className="w-full py-2 px-3 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-2 font-medium text-gray-700 transition"
+              className="w-full py-2.5 px-3 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-2.5 font-medium text-gray-700 transition shadow-sm hover:border-gray-400"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
                   fill="#4285F4"
                   d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -149,28 +148,9 @@ export default function LoginPage() {
               </svg>
               <span>Continue with Google</span>
             </button>
-
-            {/* GitHub */}
-            <button
-              onClick={() => handleOAuthLogin("github")}
-              disabled={loading}
-              className="w-full py-2 px-3 bg-gray-900 text-white rounded-lg hover:bg-black flex items-center justify-center gap-2 font-medium transition"
-            >
-              <Github className="w-4 h-4" />
-              <span>Continue with GitHub</span>
-            </button>
-
-            {/* Vercel */}
-            <button
-              onClick={() => handleQuickRoleLogin("admin")}
-              disabled={loading}
-              className="w-full py-2 px-3 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center justify-center gap-2 font-medium text-gray-700 transition"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 76 65" fill="#000000">
-                <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" />
-              </svg>
-              <span>Continue with Vercel</span>
-            </button>
+            <p className="text-[10px] text-gray-400 text-center mt-1.5">
+              Authorized Google accounts receive Admin privileges via <code className="bg-gray-100 px-1 py-0.5 rounded">ADMIN_EMAILS</code> allowlist.
+            </p>
           </div>
 
           <div className="relative flex py-1 items-center">
@@ -191,7 +171,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@backlinkmanager.com"
+                  placeholder="arsal73500@gmail.com"
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
                 />
               </div>
@@ -226,36 +206,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Quick Access Test Roles */}
-          <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
-            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block">
-              Instant Test Role Access
-            </span>
-            <div className="grid grid-cols-3 gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleQuickRoleLogin("admin")}
-                className="py-1.5 px-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 rounded font-semibold text-[11px] text-center"
-              >
-                Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickRoleLogin("editor")}
-                className="py-1.5 px-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 rounded font-semibold text-[11px] text-center"
-              >
-                Editor
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickRoleLogin("viewer")}
-                className="py-1.5 px-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-800 rounded font-semibold text-[11px] text-center"
-              >
-                Viewer
-              </button>
-            </div>
-          </div>
         </div>
 
         <div className="p-4 bg-gray-50 border-t border-gray-100 text-center text-gray-500 text-[11px]">
@@ -266,5 +216,19 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen w-full flex items-center justify-center bg-[#f8f9fa]">
+          <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

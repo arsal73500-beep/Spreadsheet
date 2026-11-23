@@ -12,6 +12,7 @@ import {
   ExternalLink,
   RefreshCw,
   AlertCircle,
+  Users,
 } from "lucide-react";
 import { UserRole } from "@/lib/auth";
 import { ProjectConfig } from "@/lib/projects-config";
@@ -20,7 +21,6 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentRole: UserRole;
-  onRoleChange: (role: UserRole) => void;
   currentProject: ProjectConfig;
   customToken: string;
   onSaveToken: (token: string) => void;
@@ -31,7 +31,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   currentRole,
-  onRoleChange,
   currentProject,
   customToken,
   onSaveToken,
@@ -42,6 +41,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  // Team management state (for admins)
+  const [usersList, setUsersList] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [userUpdateMsg, setUserUpdateMsg] = useState("");
+
   useEffect(() => {
     setTokenInput(customToken);
   }, [customToken]);
@@ -49,8 +53,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadHistory();
+      if (currentRole === "admin") {
+        loadUsers();
+      }
     }
-  }, [isOpen, currentProject.id]);
+  }, [isOpen, currentProject.id, currentRole]);
 
   const loadHistory = async () => {
     setLoadingHistory(true);
@@ -69,6 +76,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const loadUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const res = await fetch("/api/users", {
+        headers: customToken ? { "x-github-token": customToken } : {},
+      });
+      const data = await res.json();
+      if (data.users) {
+        setUsersList(data.users);
+      }
+    } catch (e) {
+      console.warn("Could not load team users", e);
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const handleUpdateRole = async (targetEmail: string, newRole: UserRole) => {
+    setUserUpdateMsg("");
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(targetEmail)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(customToken ? { "x-github-token": customToken } : {}),
+        },
+        body: JSON.stringify({ role: newRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setUserUpdateMsg(data.error || "Failed to update role");
+      } else {
+        setUserUpdateMsg(`Role updated for ${targetEmail}`);
+        loadUsers();
+      }
+    } catch (err: any) {
+      setUserUpdateMsg(err.message || "Failed to update role");
+    }
+  };
+
   const handleSaveToken = () => {
     onSaveToken(tokenInput.trim());
     setSavedSuccess(true);
@@ -84,7 +131,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
           <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
             <Settings className="w-5 h-5 text-gray-700" />
-            <span>Application Settings & GitHub Integration</span>
+            <span>Application Settings & Team Permissions</span>
           </h2>
           <button
             onClick={onClose}
@@ -174,53 +221,93 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="h-[1px] bg-gray-200" />
 
-          {/* Role Switching Section */}
+          {/* Current Verified Role Section */}
           <div className="space-y-3">
             <h3 className="font-bold text-gray-900 flex items-center gap-1.5 text-xs">
               <Shield className="w-4 h-4 text-emerald-600" />
-              <span>User Role & Team Permissions (RBAC)</span>
+              <span>Your Role & Permissions (Verified Server-Side)</span>
             </h3>
 
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                {
-                  role: "admin" as UserRole,
-                  title: "Administrator",
-                  desc: "Full application access. Add, edit, delete records, manage team and settings.",
-                },
-                {
-                  role: "editor" as UserRole,
-                  title: "Editor",
-                  desc: "View and add records, update statuses, import CSV. Cannot delete rows.",
-                },
-                {
-                  role: "viewer" as UserRole,
-                  title: "Viewer",
-                  desc: "Read-only access. Search, filter, export CSV. Cannot modify spreadsheet data.",
-                },
-              ].map((item) => (
-                <div
-                  key={item.role}
-                  onClick={() => onRoleChange(item.role)}
-                  className={`p-3 rounded-lg border cursor-pointer transition ${
-                    currentRole === item.role
-                      ? "bg-emerald-50 border-emerald-500 ring-1 ring-emerald-500"
-                      : "bg-gray-50 border-gray-200 hover:bg-gray-100"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-gray-900 capitalize">
-                      {item.title}
-                    </span>
-                    {currentRole === item.role && (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    )}
-                  </div>
-                  <p className="text-gray-500 text-[11px]">{item.desc}</p>
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-gray-900 capitalize text-sm">
+                    {currentRole} Role
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                    Active
+                  </span>
                 </div>
-              ))}
+                <p className="text-gray-500 text-[11px] mt-0.5">
+                  {currentRole === "admin"
+                    ? "Full application access. Allowed to manage spreadsheets, client workspaces, and team roles."
+                    : currentRole === "editor"
+                    ? "Authorized to create, edit, and import backlink records in authorized workspaces."
+                    : "Read-only access. You can search, filter, and export backlink sheets."}
+                </p>
+              </div>
             </div>
           </div>
+
+          {/* Admin-only Team Management Section */}
+          {currentRole === "admin" && (
+            <>
+              <div className="h-[1px] bg-gray-200" />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-gray-900 flex items-center gap-1.5 text-xs">
+                    <Users className="w-4 h-4 text-purple-600" />
+                    <span>Team Role Management (Admin Console)</span>
+                  </h3>
+                  <button
+                    onClick={loadUsers}
+                    disabled={loadingUsers}
+                    className="text-gray-500 hover:text-gray-800 p-1"
+                    title="Refresh user list"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingUsers ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+
+                {userUpdateMsg && (
+                  <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-700 text-[11px]">
+                    {userUpdateMsg}
+                  </div>
+                )}
+
+                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-52 overflow-y-auto">
+                  {loadingUsers ? (
+                    <div className="py-4 text-center text-gray-400">Loading team users...</div>
+                  ) : usersList.length === 0 ? (
+                    <div className="p-3 text-center text-gray-500">No registered users found.</div>
+                  ) : (
+                    usersList.map((user) => (
+                      <div key={user.email} className="p-2.5 flex items-center justify-between hover:bg-gray-50">
+                        <div>
+                          <p className="font-semibold text-gray-900 text-xs">{user.name || user.email}</p>
+                          <p className="text-[10px] text-gray-500">{user.email}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={user.role}
+                            onChange={(e) => handleUpdateRole(user.email, e.target.value as UserRole)}
+                            className="px-2 py-1 bg-white border border-gray-300 rounded text-[11px] font-semibold text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          >
+                            <option value="viewer">Viewer</option>
+                            <option value="editor">Editor</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-400">
+                  Note: Elevating a user to Admin requires their email to also be in the <code className="font-mono bg-gray-100 px-1 rounded">ADMIN_EMAILS</code> allowlist.
+                </p>
+              </div>
+            </>
+          )}
 
           <div className="h-[1px] bg-gray-200" />
 

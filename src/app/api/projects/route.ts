@@ -4,13 +4,14 @@ import { getProjectBacklinks } from "@/lib/storage";
 import { getApiAuthContext } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
-  const { customToken } = getApiAuthContext(req);
+  const auth = await getApiAuthContext(req, "canView");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const projectSummaries = await Promise.all(
       Object.values(PROJECTS).map(async (p) => {
         try {
-          const { records, sha, source } = await getProjectBacklinks(p.id, customToken);
+          const { records, sha, source } = await getProjectBacklinks(p.id, auth.customToken);
           return {
             ...p,
             totalBacklinks: records.length,

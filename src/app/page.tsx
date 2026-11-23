@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { SpreadsheetHomeNav } from "@/components/dashboard-home/SpreadsheetHomeNav";
 import { TemplateGallery } from "@/components/dashboard-home/TemplateGallery";
 import { SpreadsheetList } from "@/components/dashboard-home/SpreadsheetList";
@@ -14,13 +15,16 @@ import { UserRole } from "@/lib/auth";
 
 export default function SpreadsheetHomePage() {
   const router = useRouter();
+  const { data: session } = useSession();
+
+  // Role derived strictly from verified session
+  const currentRole: UserRole = (session?.user?.role as UserRole) || "viewer";
 
   const [spreadsheets, setSpreadsheets] = useState<SpreadsheetMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeWorkspace, setActiveWorkspace] = useState("all");
   const [activeFilter, setActiveFilter] = useState<"all" | "recent" | "starred" | "archived">("all");
-  const [currentRole, setCurrentRole] = useState<UserRole>("admin");
 
   // GitHub state
   const [isGitHubConnected, setIsGitHubConnected] = useState(false);
@@ -82,7 +86,6 @@ export default function SpreadsheetHomePage() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-user-role": currentRole,
         ...(customToken ? { "x-github-token": customToken } : {}),
       },
       body: JSON.stringify(data),
@@ -106,7 +109,7 @@ export default function SpreadsheetHomePage() {
     try {
       await fetch(`/api/spreadsheets/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", "x-user-role": currentRole },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isStarred }),
       });
     } catch {
@@ -118,7 +121,7 @@ export default function SpreadsheetHomePage() {
   const handleRename = async (id: string, newTitle: string) => {
     const res = await fetch(`/api/spreadsheets/${id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", "x-user-role": currentRole },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: newTitle }),
     });
     if (!res.ok) {
@@ -135,7 +138,6 @@ export default function SpreadsheetHomePage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-user-role": currentRole,
           ...(customToken ? { "x-github-token": customToken } : {}),
         },
         body: JSON.stringify({ title: `${sheet.title} (Copy)` }),
@@ -155,12 +157,12 @@ export default function SpreadsheetHomePage() {
     try {
       await fetch(`/api/spreadsheets/${sheet.id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", "x-user-role": currentRole },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isArchived }),
       });
       fetchSpreadsheets();
-    } catch (err: any) {
-      alert(err.message || "Failed to update archive status.");
+    } catch {
+      fetchSpreadsheets();
     }
   };
 
@@ -169,7 +171,6 @@ export default function SpreadsheetHomePage() {
     const res = await fetch(`/api/spreadsheets/${id}`, {
       method: "DELETE",
       headers: {
-        "x-user-role": currentRole,
         ...(customToken ? { "x-github-token": customToken } : {}),
       },
     });
@@ -197,7 +198,6 @@ export default function SpreadsheetHomePage() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         currentRole={currentRole}
-        onRoleChange={setCurrentRole}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         isGitHubConnected={isGitHubConnected}
         onNewSpreadsheet={() => {
@@ -256,7 +256,6 @@ export default function SpreadsheetHomePage() {
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
         currentRole={currentRole}
-        onRoleChange={setCurrentRole}
         currentProject={{
           id: activeWorkspace === "all" ? "md-health-center" : activeWorkspace,
           name: WORKSPACES[activeWorkspace]?.name || "MD Health Center",

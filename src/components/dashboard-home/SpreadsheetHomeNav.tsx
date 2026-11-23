@@ -8,9 +8,7 @@ import {
   Github,
   Shield,
   LogOut,
-  User,
   Plus,
-  ExternalLink,
 } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import { UserRole } from "@/lib/auth";
@@ -19,7 +17,6 @@ interface SpreadsheetHomeNavProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   currentRole: UserRole;
-  onRoleChange: (role: UserRole) => void;
   onOpenSettings: () => void;
   isGitHubConnected: boolean;
   onNewSpreadsheet: () => void;
@@ -29,12 +26,19 @@ export const SpreadsheetHomeNav: React.FC<SpreadsheetHomeNavProps> = ({
   searchQuery,
   onSearchChange,
   currentRole,
-  onRoleChange,
   onOpenSettings,
   isGitHubConnected,
   onNewSpreadsheet,
 }) => {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const { data: session } = useSession();
+
+  const userName = session?.user?.name || (session?.user?.email ? session.user.email.split("@")[0] : "User");
+  const userEmail = session?.user?.email || "";
+  const userImage = session?.user?.image;
+  const userInitial = (userName[0] || userEmail[0] || "U").toUpperCase();
+
+  const canCreate = currentRole === "admin" || currentRole === "editor";
 
   return (
     <header className="bg-white border-b border-gray-200 px-6 py-2.5 flex items-center justify-between gap-4 select-none shrink-0 sticky top-0 z-30">
@@ -74,27 +78,30 @@ export const SpreadsheetHomeNav: React.FC<SpreadsheetHomeNavProps> = ({
 
       {/* Right Controls */}
       <div className="flex items-center gap-3">
-        {/* Create Button */}
-        <button
-          onClick={onNewSpreadsheet}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">New Spreadsheet</span>
-        </button>
-
-        {/* Role Selector Badge */}
-        <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1 text-xs">
-          <Shield className="w-3.5 h-3.5 text-gray-500" />
-          <select
-            value={currentRole}
-            onChange={(e) => onRoleChange(e.target.value as UserRole)}
-            className="bg-transparent text-gray-800 font-semibold text-xs focus:outline-none cursor-pointer capitalize"
+        {/* Create Button (Restricted to Admin / Editor) */}
+        {canCreate && (
+          <button
+            onClick={onNewSpreadsheet}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition"
           >
-            <option value="admin">Admin</option>
-            <option value="editor">Editor</option>
-            <option value="viewer">Viewer</option>
-          </select>
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Spreadsheet</span>
+          </button>
+        )}
+
+        {/* Verified Server-derived Role Badge (Read-only) */}
+        <div
+          title={`Your role: ${currentRole.toUpperCase()}`}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border ${
+            currentRole === "admin"
+              ? "bg-purple-50 text-purple-800 border-purple-200"
+              : currentRole === "editor"
+              ? "bg-blue-50 text-blue-800 border-blue-200"
+              : "bg-gray-100 text-gray-700 border-gray-200"
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5" />
+          <span className="capitalize">{currentRole}</span>
         </div>
 
         {/* GitHub Indicator */}
@@ -131,21 +138,33 @@ export const SpreadsheetHomeNav: React.FC<SpreadsheetHomeNavProps> = ({
           <Settings className="w-4 h-4" />
         </button>
 
-        {/* Profile Avatar / Menu */}
+        {/* Real Profile Avatar / Menu */}
         <div className="relative">
           <button
             onClick={() => setShowProfileMenu(!showProfileMenu)}
-            className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-400 text-white font-bold text-xs flex items-center justify-center ring-2 ring-white shadow cursor-pointer"
+            className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-400 text-white font-bold text-xs flex items-center justify-center ring-2 ring-white shadow cursor-pointer overflow-hidden"
           >
-            A
+            {userImage ? (
+              <img src={userImage} alt={userName} className="w-full h-full object-cover" />
+            ) : (
+              <span>{userInitial}</span>
+            )}
           </button>
 
           {showProfileMenu && (
             <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-gray-200 rounded-xl shadow-xl py-2 z-50 text-xs">
               <div className="px-4 py-2 border-b border-gray-100">
-                <p className="font-semibold text-gray-900">Arsal Malik</p>
-                <p className="text-[11px] text-gray-500">arsal73500@gmail.com</p>
-                <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 font-bold uppercase">
+                <p className="font-semibold text-gray-900 truncate">{userName}</p>
+                <p className="text-[11px] text-gray-500 truncate">{userEmail}</p>
+                <span
+                  className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                    currentRole === "admin"
+                      ? "bg-purple-100 text-purple-800"
+                      : currentRole === "editor"
+                      ? "bg-blue-100 text-blue-800"
+                      : "bg-gray-100 text-gray-800"
+                  }`}
+                >
                   {currentRole}
                 </span>
               </div>
@@ -173,7 +192,7 @@ export const SpreadsheetHomeNav: React.FC<SpreadsheetHomeNavProps> = ({
               <div className="border-t border-gray-100 pt-1">
                 <button
                   onClick={() => signOut({ callbackUrl: "/login" })}
-                  className="w-full text-left px-4 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+                  className="w-full text-left px-4 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2 font-medium"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Sign Out</span>

@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: { projectId: string } }
 ) {
   const { projectId } = params;
-  const access = validateProjectAccess(projectId, req, "canView");
+  const access = await validateProjectAccess(projectId, req, "canView");
   if (!access.authorized) return access.errorResponse!;
 
   try {

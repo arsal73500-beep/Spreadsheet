@@ -13,11 +13,12 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { customToken } = getApiAuthContext(req);
+  const auth = await getApiAuthContext(req, "canView");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     recordSpreadsheetOpened(id);
-    const data = await getSpreadsheet(id, customToken);
+    const data = await getSpreadsheet(id, auth.customToken);
 
     return NextResponse.json({
       success: true,
@@ -36,18 +37,12 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canEdit")) {
-    return NextResponse.json(
-      { error: "Forbidden: Viewer role cannot modify spreadsheet settings." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canEdit");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const body = await req.json();
-    const updated = await updateSpreadsheetMetadata(id, body, customToken);
+    const updated = await updateSpreadsheetMetadata(id, body, auth.customToken);
 
     return NextResponse.json({
       success: true,
@@ -66,17 +61,11 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canDelete")) {
-    return NextResponse.json(
-      { error: "Forbidden: Only Administrators can delete spreadsheets." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canDelete");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
-    await deleteSpreadsheet(id, customToken);
+    await deleteSpreadsheet(id, auth.customToken);
     return NextResponse.json({
       success: true,
       message: `Spreadsheet "${id}" permanently deleted.`,

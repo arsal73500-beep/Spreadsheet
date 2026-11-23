@@ -8,20 +8,16 @@ import {
   Lock,
   Mail,
   User,
-  Shield,
   ArrowRight,
   AlertCircle,
-  CheckCircle2,
 } from "lucide-react";
 import Link from "next/link";
-import { UserRole } from "@/lib/auth";
 
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<UserRole>("editor");
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -37,9 +33,9 @@ export default function RegisterPage() {
     try {
       const res = await signIn("credentials", {
         redirect: false,
-        email,
+        email: email.trim().toLowerCase(),
         password,
-        role,
+        callbackUrl: "/",
       });
 
       if (res?.error) {
@@ -87,7 +83,7 @@ export default function RegisterPage() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Arsal Malik"
+                  placeholder="Your Full Name"
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
                 />
               </div>
@@ -101,7 +97,7 @@ export default function RegisterPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="arsal73500@gmail.com"
+                  placeholder="yourname@example.com"
                   className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs"
                 />
               </div>
@@ -121,21 +117,9 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-gray-700 font-medium mb-1">Requested Role</label>
-              <div className="relative">
-                <Shield className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as UserRole)}
-                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 text-xs bg-white cursor-pointer"
-                >
-                  <option value="admin">Administrator (Full Access)</option>
-                  <option value="editor">Editor (Create & Edit)</option>
-                  <option value="viewer">Viewer (Read-Only)</option>
-                </select>
-              </div>
-            </div>
+            <p className="text-[11px] text-gray-400">
+              New accounts receive Viewer access by default. An Administrator can promote your account to Editor.
+            </p>
 
             <button
               type="submit"

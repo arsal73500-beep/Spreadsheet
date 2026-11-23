@@ -8,24 +8,18 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canAdd")) {
-    return NextResponse.json(
-      { error: "Forbidden: Viewer role cannot duplicate spreadsheets." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canAdd");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const body = await req.json().catch(() => ({}));
-    const ownerName = req.headers.get("x-user-name") || "Arsal Malik";
+    const ownerName = auth.user?.name || "User";
 
     const cloned = await duplicateSpreadsheet(
       id,
       body.title,
       ownerName,
-      customToken
+      auth.customToken
     );
 
     return NextResponse.json(

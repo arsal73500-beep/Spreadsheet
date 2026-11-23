@@ -8,7 +8,7 @@ export async function PATCH(
   { params }: { params: { projectId: string; id: string } }
 ) {
   const { projectId, id } = params;
-  const access = validateProjectAccess(projectId, req, "canEdit");
+  const access = await validateProjectAccess(projectId, req, "canEdit");
   if (!access.authorized) return access.errorResponse!;
 
   try {
@@ -72,7 +72,7 @@ export async function DELETE(
   { params }: { params: { projectId: string; id: string } }
 ) {
   const { projectId, id } = params;
-  const access = validateProjectAccess(projectId, req, "canDelete");
+  const access = await validateProjectAccess(projectId, req, "canDelete");
   if (!access.authorized) return access.errorResponse!;
 
   try {
