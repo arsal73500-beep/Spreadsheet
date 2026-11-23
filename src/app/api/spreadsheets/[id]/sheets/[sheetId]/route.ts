@@ -13,11 +13,10 @@ export async function GET(
   { params }: { params: { id: string; sheetId: string } }
 ) {
   const { id, sheetId } = params;
-  const auth = await getApiAuthContext(req, "canView");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { customToken } = getApiAuthContext(req);
 
   try {
-    const data = await getSpreadsheet(id, auth.customToken, sheetId);
+    const data = await getSpreadsheet(id, customToken, sheetId);
     return NextResponse.json({
       success: true,
       tabId: sheetId,
@@ -38,14 +37,20 @@ export async function PATCH(
   { params }: { params: { id: string; sheetId: string } }
 ) {
   const { id, sheetId } = params;
-  const auth = await getApiAuthContext(req, "canEdit");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canEdit")) {
+    return NextResponse.json(
+      { error: "Forbidden: Viewer role cannot edit sheet tabs." },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await req.json();
 
     if (body.name) {
-      const updatedMeta = await renameSheetTab(id, sheetId, body.name, auth.customToken);
+      const updatedMeta = await renameSheetTab(id, sheetId, body.name, customToken);
       return NextResponse.json({
         success: true,
         metadata: updatedMeta,
@@ -53,7 +58,7 @@ export async function PATCH(
     }
 
     if (body.active) {
-      const updatedMeta = await setActiveSheetTab(id, sheetId, auth.customToken);
+      const updatedMeta = await setActiveSheetTab(id, sheetId);
       return NextResponse.json({
         success: true,
         metadata: updatedMeta,
@@ -74,11 +79,17 @@ export async function DELETE(
   { params }: { params: { id: string; sheetId: string } }
 ) {
   const { id, sheetId } = params;
-  const auth = await getApiAuthContext(req, "canDelete");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canDelete")) {
+    return NextResponse.json(
+      { error: "Forbidden: Only Administrators can delete sheets." },
+      { status: 403 }
+    );
+  }
 
   try {
-    const updatedMeta = await deleteSheetTab(id, sheetId, auth.customToken);
+    const updatedMeta = await deleteSheetTab(id, sheetId, customToken);
     return NextResponse.json({
       success: true,
       message: `Deleted sheet tab "${sheetId}"`,

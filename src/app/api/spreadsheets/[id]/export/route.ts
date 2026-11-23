@@ -7,11 +7,9 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const auth = await getApiAuthContext(req, "canExport");
-  if (auth.errorResponse) return auth.errorResponse;
 
   try {
-    const fullExport = await exportEntireSpreadsheet(id, auth.customToken);
+    const fullExport = await exportEntireSpreadsheet(id);
     return NextResponse.json({
       success: true,
       data: fullExport,

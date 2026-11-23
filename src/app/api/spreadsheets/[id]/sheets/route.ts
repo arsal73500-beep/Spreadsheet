@@ -8,14 +8,20 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const auth = await getApiAuthContext(req, "canAdd");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canAdd")) {
+    return NextResponse.json(
+      { error: "Forbidden: Viewer role cannot add sheet tabs." },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await req.json().catch(() => ({}));
     const { name, records = [] } = body;
 
-    const result = await addSheetTab(id, name, records, auth.customToken);
+    const result = await addSheetTab(id, name, records, customToken);
 
     return NextResponse.json(
       {
@@ -39,8 +45,14 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  const auth = await getApiAuthContext(req, "canEdit");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canEdit")) {
+    return NextResponse.json(
+      { error: "Forbidden: Viewer role cannot reorder sheet tabs." },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await req.json();
@@ -53,7 +65,7 @@ export async function PUT(
       );
     }
 
-    const updated = await reorderSheetTabs(id, tabIds, auth.customToken);
+    const updated = await reorderSheetTabs(id, tabIds, customToken);
 
     return NextResponse.json({
       success: true,

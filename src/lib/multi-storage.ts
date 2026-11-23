@@ -14,254 +14,30 @@ import { BacklinkRecord, createEmptyBacklink } from "./schema";
 import {
   readBacklinksFromGitHub,
   writeBacklinksToGitHub,
-  readJsonFromGitHub,
-  writeJsonToGitHub,
-  deleteFileFromGitHub,
-  listDirectoryFromGitHub,
   getGitHubConfig,
-  isVercelProduction,
+  getOctokitClient,
 } from "./github";
 
-// ─── Local filesystem paths (dev only) ───────────────────────────────────────
 const DATA_DIR = path.join(process.cwd(), "data");
 const SPREADSHEETS_DIR = path.join(DATA_DIR, "spreadsheets");
 const WORKSPACES_DIR = path.join(DATA_DIR, "workspaces");
 
-// ─── GitHub path helpers ─────────────────────────────────────────────────────
-const GH = {
-  metadata: (id: string) => `data/spreadsheets/${id}/metadata.json`,
-  settings: (id: string) => `data/spreadsheets/${id}/settings.json`,
-  backlinks: (id: string) => `data/spreadsheets/${id}/backlinks.json`,
-  tab: (id: string, tabId: string) => `data/spreadsheets/${id}/tabs/${tabId}.json`,
-  workspaces: () => `data/workspaces/workspaces.json`,
-  spreadsheetsDir: () => `data/spreadsheets`,
-};
-
-// ─── Environment helpers ──────────────────────────────────────────────────────
-function getToken(customToken?: string): string | undefined {
-  return customToken || getGitHubConfig().token || undefined;
-}
-
-/** True when we must use GitHub for all storage (Vercel serverless) */
-function useGitHubStorage(customToken?: string): boolean {
-  return isVercelProduction() || Boolean(getToken(customToken));
-}
-
-// ─── Local-only helpers (safe — only called outside Vercel) ──────────────────
 function ensureDir(dirPath: string) {
-  if (isVercelProduction()) return; // Never mkdir on Vercel
-  try {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-  } catch (err) {
-    console.warn("ensureDir failed (continuing):", err);
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
   }
 }
 
-function localWriteJson(filePath: string, data: any) {
-  if (isVercelProduction()) return;
-  try {
-    ensureDir(path.dirname(filePath));
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("localWriteJson failed (continuing):", err);
-  }
-}
-
-function localReadJson<T>(filePath: string): T | null {
-  try {
-    if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-function localExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
-
-function localRemove(filePath: string) {
-  if (isVercelProduction()) return;
-  try {
-    if (fs.existsSync(filePath)) {
-      fs.rmSync(filePath, { force: true });
-    }
-  } catch (err) {
-    console.warn("localRemove failed:", err);
-  }
-}
-
-function localRemoveDir(dirPath: string) {
-  if (isVercelProduction()) return;
-  try {
-    if (fs.existsSync(dirPath)) {
-      fs.rmSync(dirPath, { recursive: true, force: true });
-    }
-  } catch (err) {
-    console.warn("localRemoveDir failed:", err);
-  }
-}
-
-// ─── GitHub-backed metadata read/write ───────────────────────────────────────
-async function ghReadMetadata(
-  id: string,
-  token: string
-): Promise<{ data: SpreadsheetMetadata; sha: string } | null> {
-  return readJsonFromGitHub<SpreadsheetMetadata>(GH.metadata(id), token);
-}
-
-async function ghWriteMetadata(
-  id: string,
-  metadata: SpreadsheetMetadata,
-  token: string,
-  currentSha?: string
-): Promise<string> {
-  const result = await writeJsonToGitHub(
-    GH.metadata(id),
-    metadata,
-    currentSha,
-    `chore(meta): update metadata for spreadsheet "${metadata.title}"`,
-    token
-  );
-  return result.sha;
-}
-
-async function ghReadSettings(
-  id: string,
-  token: string
-): Promise<SpreadsheetSettings | null> {
-  const result = await readJsonFromGitHub<SpreadsheetSettings>(GH.settings(id), token);
-  return result?.data || null;
-}
-
-async function ghReadTabRecords(
-  id: string,
-  tabId: string,
-  token: string
-): Promise<{ data: BacklinkRecord[]; sha: string } | null> {
-  const result = await readJsonFromGitHub<BacklinkRecord[]>(GH.tab(id, tabId), token);
-  if (!result) return null;
-  return { data: Array.isArray(result.data) ? result.data : [], sha: result.sha };
-}
-
-// ─── Normalize metadata (add sheets/activeSheetId if missing) ─────────────────
-function applyDefaultSheets(meta: SpreadsheetMetadata): SpreadsheetMetadata {
-  if (!Array.isArray(meta.sheets) || meta.sheets.length === 0) {
-    meta.sheets = [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: meta.recordCount || 0 }];
-  }
-  if (!meta.activeSheetId && meta.sheets.length > 0) {
-    meta.activeSheetId = meta.sheets[0].id;
-  }
-  return meta;
-}
-
-// ─── GitHub: normalize metadata (read → patch → write back if changed) ────────
-async function ghNormalizeMetadata(id: string, token: string): Promise<SpreadsheetMetadata> {
-  const result = await ghReadMetadata(id, token);
-  if (!result) throw new Error(`Spreadsheet "${id}" not found in GitHub.`);
-  const meta = result.data;
-  const needsPatch = !Array.isArray(meta.sheets) || meta.sheets.length === 0 || !meta.activeSheetId;
-  const normalized = applyDefaultSheets(meta);
-  if (needsPatch) {
-    await ghWriteMetadata(id, normalized, token, result.sha);
-  }
-  return normalized;
-}
-
-// ─── Local: normalize metadata ────────────────────────────────────────────────
-function localNormalizeMetadata(spreadsheetId: string): SpreadsheetMetadata {
-  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
-  const metaFile = path.join(sheetDir, "metadata.json");
-  if (!localExists(metaFile)) {
-    throw new Error(`Spreadsheet "${spreadsheetId}" metadata not found locally.`);
-  }
-  const meta = localReadJson<SpreadsheetMetadata>(metaFile);
-  if (!meta) throw new Error(`Failed to parse metadata for "${spreadsheetId}".`);
-
-  const needsPatch = !Array.isArray(meta.sheets) || meta.sheets.length === 0 || !meta.activeSheetId;
-  const normalized = applyDefaultSheets(meta);
-
-  if (needsPatch) {
-    // If no tab_main file exists, seed from legacy backlinks.json
-    const tabsDir = path.join(sheetDir, "tabs");
-    ensureDir(tabsDir);
-    const tabMainPath = path.join(tabsDir, "tab_main.json");
-    if (!localExists(tabMainPath)) {
-      const legacy = localReadJson<BacklinkRecord[]>(path.join(sheetDir, "backlinks.json")) || [];
-      localWriteJson(tabMainPath, legacy);
-    }
-    localWriteJson(metaFile, normalized);
-  }
-
-  return normalized;
-}
-
-// ─── ensureInitialMigration ───────────────────────────────────────────────────
 /**
- * On Vercel: ensures GitHub has workspaces + initial spreadsheet data.
- * Locally: ensures local filesystem is bootstrapped.
- * Never overwrites existing spreadsheets.
+ * Migrate legacy client files into data/spreadsheets/[id] if not already present
  */
-export async function ensureInitialMigration(customToken?: string) {
-  const token = getToken(customToken);
-  if (isVercelProduction()) {
-    if (!token) return; // Can't do anything without token on Vercel
-    await ghEnsureInitialMigration(token);
-    return;
-  }
-  // Local development
-  localEnsureInitialMigration();
-}
-
-async function ghEnsureInitialMigration(token: string) {
-  // Check if data/workspaces/workspaces.json exists; create if not
-  const wsResult = await readJsonFromGitHub(GH.workspaces(), token);
-  if (!wsResult) {
-    await writeJsonToGitHub(
-      GH.workspaces(),
-      WORKSPACES,
-      undefined,
-      "chore(init): seed workspace configuration",
-      token
-    ).catch((e) => console.warn("Could not init workspaces.json on GitHub:", e));
-  }
-
-  // List spreadsheets from GitHub
-  const dirs = await listDirectoryFromGitHub(GH.spreadsheetsDir(), token);
-  const existing = dirs.filter((d) => d.type === "dir").map((d) => d.name);
-
-  if (existing.length > 0) {
-    // Normalize any existing metadata that lacks sheets
-    for (const id of existing) {
-      try {
-        await ghNormalizeMetadata(id, token);
-      } catch (e) {
-        console.warn(`Could not normalize metadata for ${id}:`, e);
-      }
-    }
-    return;
-  }
-
-  // Seed default spreadsheets (only if none exist in GitHub)
-  const defaultSpreadsheets = buildDefaultSpreadsheets();
-  for (const { metadata, tabsRecords, settings } of defaultSpreadsheets) {
-    await ghCreateSpreadsheetFiles(metadata, tabsRecords, settings, token);
-  }
-}
-
-function localEnsureInitialMigration() {
+export function ensureInitialMigration() {
   ensureDir(SPREADSHEETS_DIR);
   ensureDir(WORKSPACES_DIR);
 
   const wsFile = path.join(WORKSPACES_DIR, "workspaces.json");
-  if (!localExists(wsFile)) {
-    localWriteJson(wsFile, WORKSPACES);
+  if (!fs.existsSync(wsFile)) {
+    fs.writeFileSync(wsFile, JSON.stringify(WORKSPACES, null, 2), "utf-8");
   }
 
   const existingDirs = fs
@@ -269,326 +45,338 @@ function localEnsureInitialMigration() {
     .filter((d) => d.isDirectory());
 
   if (existingDirs.length > 0) {
+    // Ensure all existing sheets have the `sheets` array in metadata
     for (const dir of existingDirs) {
-      try {
-        localNormalizeMetadata(dir.name);
-      } catch (e) {
-        console.warn(`Could not normalize metadata for ${dir.name}:`, e);
-      }
+      normalizeSpreadsheetMetadata(dir.name);
     }
     return;
   }
 
-  const defaultSpreadsheets = buildDefaultSpreadsheets();
-  for (const { metadata, tabsRecords, settings } of defaultSpreadsheets) {
-    localCreateSpreadsheetFiles(metadata, tabsRecords, settings);
+  // 1. Migrate MD Health Center
+  const legacyMd = path.join(DATA_DIR, "md-health-center", "backlinks.json");
+  let mdRecords: BacklinkRecord[] = [];
+  if (fs.existsSync(legacyMd)) {
+    try {
+      mdRecords = JSON.parse(fs.readFileSync(legacyMd, "utf-8"));
+    } catch {}
   }
+  createSpreadsheetInternal(
+    {
+      id: "sheet_md_backlinks_01",
+      title: "MD Health Center — Backlink Tracker",
+      workspaceId: "md-health-center",
+      description: "Primary backlink tracker for clinical diagnostic and health awareness",
+      owner: "Arsal Malik",
+      ownerEmail: "arsal73500@gmail.com",
+      createdAt: "2026-10-15T09:00:00.000Z",
+      updatedAt: new Date().toISOString(),
+      isStarred: true,
+      isArchived: false,
+      recordCount: mdRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [
+        { id: "tab_main", name: "Live Backlinks", order: 0, recordCount: mdRecords.length },
+        { id: "tab_guest_posts", name: "Guest Posts Pipeline", order: 1, recordCount: 1 },
+      ],
+    },
+    {
+      tab_main: mdRecords,
+      tab_guest_posts: [
+        {
+          ...createEmptyBacklink("medicaljournalonline.org"),
+          id: "bl_md_gp_01",
+          backlinkUrl: "https://medicaljournalonline.org/preventive-screenings",
+          status: "Submitted",
+          category: "Guest Post",
+          domain: "medicaljournalonline.org",
+          dr: 72,
+          da: 68,
+          organicTraffic: 140000,
+          anchorText: "MD Health Center Research",
+          linkType: "Dofollow",
+          notes: "Editorial draft under review",
+        },
+      ],
+    }
+  );
+
+  // MD Health Center secondary sheet: Local Citations
+  createSpreadsheetInternal(
+    {
+      id: "sheet_md_citations_02",
+      title: "MD Health Center — Local Citations",
+      workspaceId: "md-health-center",
+      description: "Local clinic map packs, NAP consistency and healthcare directories",
+      owner: "Arsal Malik",
+      ownerEmail: "arsal73500@gmail.com",
+      createdAt: "2026-11-01T10:30:00.000Z",
+      updatedAt: new Date().toISOString(),
+      isStarred: false,
+      isArchived: false,
+      recordCount: 2,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 2 }],
+    },
+    {
+      tab_main: [
+        {
+          ...createEmptyBacklink("google.com/business"),
+          id: "bl_md_cit_01",
+          backlinkUrl: "https://google.com/business/md-health-center",
+          status: "Live",
+          category: "Local Directory",
+          domain: "google.com",
+          dr: 98,
+          da: 98,
+          organicTraffic: 5000000,
+          anchorText: "MD Health Center Clinics",
+          linkType: "Dofollow",
+          notes: "Google Business Profile primary listing",
+        },
+        {
+          ...createEmptyBacklink("bingplaces.com"),
+          id: "bl_md_cit_02",
+          backlinkUrl: "https://bingplaces.com/md-health-center",
+          status: "Submitted",
+          category: "Local Directory",
+          domain: "bingplaces.com",
+          dr: 92,
+          da: 90,
+          organicTraffic: 1200000,
+          anchorText: "MD Health Center",
+          linkType: "Dofollow",
+          notes: "Bing Places verification submitted",
+        },
+      ],
+    }
+  );
+
+  // 2. AINT Foundation
+  const legacyAint = path.join(DATA_DIR, "aint-foundation", "backlinks.json");
+  let aintRecords: BacklinkRecord[] = [];
+  if (fs.existsSync(legacyAint)) {
+    try {
+      aintRecords = JSON.parse(fs.readFileSync(legacyAint, "utf-8"));
+    } catch {}
+  }
+  createSpreadsheetInternal(
+    {
+      id: "sheet_aint_backlinks_01",
+      title: "AINT Foundation — Backlink Tracker",
+      workspaceId: "aint-foundation",
+      description: "UK Community Interest Company (CIC) backlink campaign",
+      owner: "Arsal Malik",
+      ownerEmail: "arsal73500@gmail.com",
+      createdAt: "2026-10-10T08:00:00.000Z",
+      updatedAt: new Date().toISOString(),
+      isStarred: true,
+      isArchived: false,
+      recordCount: aintRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: aintRecords.length }],
+    },
+    { tab_main: aintRecords }
+  );
+
+  // 3. Dr Irshad Malik
+  const legacyDr = path.join(DATA_DIR, "dr-irshad-malik", "backlinks.json");
+  let drRecords: BacklinkRecord[] = [];
+  if (fs.existsSync(legacyDr)) {
+    try {
+      drRecords = JSON.parse(fs.readFileSync(legacyDr, "utf-8"));
+    } catch {}
+  }
+  createSpreadsheetInternal(
+    {
+      id: "sheet_dr_backlinks_01",
+      title: "Dr. Irshad Malik — Backlink Tracker",
+      workspaceId: "dr-irshad-malik",
+      description: "ENT surgeon authority profiles, medical directories and guest articles",
+      owner: "Arsal Malik",
+      ownerEmail: "arsal73500@gmail.com",
+      createdAt: "2026-09-15T09:00:00.000Z",
+      updatedAt: new Date().toISOString(),
+      isStarred: true,
+      isArchived: false,
+      recordCount: drRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: drRecords.length }],
+    },
+    { tab_main: drRecords }
+  );
+
+  // 4. General Spreadsheet
+  createSpreadsheetInternal(
+    {
+      id: "sheet_general_01",
+      title: "General SEO Outreach & Link Opportunities",
+      workspaceId: "general",
+      description: "Universal backlinks and prospect websites to evaluate",
+      owner: "Arsal Malik",
+      ownerEmail: "arsal73500@gmail.com",
+      createdAt: "2026-11-20T11:00:00.000Z",
+      updatedAt: new Date().toISOString(),
+      isStarred: false,
+      isArchived: false,
+      recordCount: 1,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 1 }],
+    },
+    {
+      tab_main: [
+        {
+          ...createEmptyBacklink("hubspot.com"),
+          id: "bl_gen_01",
+          backlinkUrl: "https://blog.hubspot.com/marketing/community-resources",
+          status: "Pending",
+          category: "Resource Page",
+          domain: "hubspot.com",
+          dr: 93,
+          da: 92,
+          organicTraffic: 8900000,
+          anchorText: "Recommended Outreach Tools",
+          linkType: "Dofollow",
+          notes: "High authority target for editorial collaboration",
+        },
+      ],
+    }
+  );
 }
 
-// ─── Default spreadsheet seed data ───────────────────────────────────────────
-function buildDefaultSpreadsheets(): Array<{
-  metadata: SpreadsheetMetadata;
-  tabsRecords: Record<string, BacklinkRecord[]>;
-  settings: SpreadsheetSettings;
-}> {
-  // Read legacy files locally (empty arrays on Vercel since no fs access)
-  function readLegacy(relPath: string): BacklinkRecord[] {
-    if (isVercelProduction()) return [];
-    return localReadJson<BacklinkRecord[]>(path.join(DATA_DIR, relPath)) || [];
+/**
+ * Ensure spreadsheet metadata has `sheets` array & `activeSheetId`
+ */
+function normalizeSpreadsheetMetadata(spreadsheetId: string): SpreadsheetMetadata {
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const metaFile = path.join(sheetDir, "metadata.json");
+  if (!fs.existsSync(metaFile)) {
+    throw new Error(`Spreadsheet "${spreadsheetId}" metadata not found.`);
   }
 
-  const mdRecords = readLegacy("md-health-center/backlinks.json");
-  const aintRecords = readLegacy("aint-foundation/backlinks.json");
-  const drRecords = readLegacy("dr-irshad-malik/backlinks.json");
+  const meta: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+  let modified = false;
 
-  const now = new Date().toISOString();
-  const defaultSettings: SpreadsheetSettings = { autoExtractDomain: true };
+  if (!Array.isArray(meta.sheets) || meta.sheets.length === 0) {
+    const tabsDir = path.join(sheetDir, "tabs");
+    ensureDir(tabsDir);
 
-  return [
-    {
-      metadata: {
-        id: "sheet_md_backlinks_01",
-        title: "MD Health Center — Backlink Tracker",
-        workspaceId: "md-health-center",
-        description: "Primary backlink tracker for clinical diagnostic and health awareness",
-        owner: "Arsal Malik",
-        ownerEmail: "arsal73500@gmail.com",
-        createdAt: "2026-10-15T09:00:00.000Z",
-        updatedAt: now,
-        isStarred: true,
-        isArchived: false,
-        recordCount: mdRecords.length,
-        activeSheetId: "tab_main",
-        sheets: [
-          { id: "tab_main", name: "Live Backlinks", order: 0, recordCount: mdRecords.length },
-          { id: "tab_guest_posts", name: "Guest Posts Pipeline", order: 1, recordCount: 1 },
-        ],
+    let defaultRecords: BacklinkRecord[] = [];
+    const rootRecords = path.join(sheetDir, "backlinks.json");
+    if (fs.existsSync(rootRecords)) {
+      try {
+        defaultRecords = JSON.parse(fs.readFileSync(rootRecords, "utf-8"));
+      } catch {}
+    }
+
+    const tabMainPath = path.join(tabsDir, "tab_main.json");
+    if (!fs.existsSync(tabMainPath)) {
+      fs.writeFileSync(tabMainPath, JSON.stringify(defaultRecords, null, 2), "utf-8");
+    }
+
+    meta.sheets = [
+      {
+        id: "tab_main",
+        name: "Sheet 1",
+        order: 0,
+        recordCount: defaultRecords.length,
       },
-      tabsRecords: {
-        tab_main: mdRecords,
-        tab_guest_posts: [
-          {
-            ...createEmptyBacklink("medicaljournalonline.org"),
-            id: "bl_md_gp_01",
-            backlinkUrl: "https://medicaljournalonline.org/preventive-screenings",
-            status: "Submitted",
-            category: "Guest Post",
-            domain: "medicaljournalonline.org",
-            dr: 72,
-            da: 68,
-            organicTraffic: 140000,
-            anchorText: "MD Health Center Research",
-            linkType: "Dofollow",
-            notes: "Editorial draft under review",
-          },
-        ],
-      },
-      settings: defaultSettings,
-    },
-    {
-      metadata: {
-        id: "sheet_md_citations_02",
-        title: "MD Health Center — Local Citations",
-        workspaceId: "md-health-center",
-        description: "Local clinic map packs, NAP consistency and healthcare directories",
-        owner: "Arsal Malik",
-        ownerEmail: "arsal73500@gmail.com",
-        createdAt: "2026-11-01T10:30:00.000Z",
-        updatedAt: now,
-        isStarred: false,
-        isArchived: false,
-        recordCount: 2,
-        activeSheetId: "tab_main",
-        sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 2 }],
-      },
-      tabsRecords: {
-        tab_main: [
-          {
-            ...createEmptyBacklink("google.com/business"),
-            id: "bl_md_cit_01",
-            backlinkUrl: "https://google.com/business/md-health-center",
-            status: "Live",
-            category: "Local Directory",
-            domain: "google.com",
-            dr: 98,
-            da: 98,
-            organicTraffic: 5000000,
-            anchorText: "MD Health Center Clinics",
-            linkType: "Dofollow",
-            notes: "Google Business Profile primary listing",
-          },
-          {
-            ...createEmptyBacklink("bingplaces.com"),
-            id: "bl_md_cit_02",
-            backlinkUrl: "https://bingplaces.com/md-health-center",
-            status: "Submitted",
-            category: "Local Directory",
-            domain: "bingplaces.com",
-            dr: 92,
-            da: 90,
-            organicTraffic: 1200000,
-            anchorText: "MD Health Center",
-            linkType: "Dofollow",
-            notes: "Bing Places verification submitted",
-          },
-        ],
-      },
-      settings: defaultSettings,
-    },
-    {
-      metadata: {
-        id: "sheet_aint_backlinks_01",
-        title: "AINT Foundation — Backlink Tracker",
-        workspaceId: "aint-foundation",
-        description: "UK Community Interest Company (CIC) backlink campaign",
-        owner: "Arsal Malik",
-        ownerEmail: "arsal73500@gmail.com",
-        createdAt: "2026-10-10T08:00:00.000Z",
-        updatedAt: now,
-        isStarred: true,
-        isArchived: false,
-        recordCount: aintRecords.length,
-        activeSheetId: "tab_main",
-        sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: aintRecords.length }],
-      },
-      tabsRecords: { tab_main: aintRecords },
-      settings: defaultSettings,
-    },
-    {
-      metadata: {
-        id: "sheet_dr_backlinks_01",
-        title: "Dr. Irshad Malik — Backlink Tracker",
-        workspaceId: "dr-irshad-malik",
-        description: "ENT surgeon authority profiles, medical directories and guest articles",
-        owner: "Arsal Malik",
-        ownerEmail: "arsal73500@gmail.com",
-        createdAt: "2026-09-15T09:00:00.000Z",
-        updatedAt: now,
-        isStarred: true,
-        isArchived: false,
-        recordCount: drRecords.length,
-        activeSheetId: "tab_main",
-        sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: drRecords.length }],
-      },
-      tabsRecords: { tab_main: drRecords },
-      settings: defaultSettings,
-    },
-    {
-      metadata: {
-        id: "sheet_general_01",
-        title: "General SEO Outreach & Link Opportunities",
-        workspaceId: "general",
-        description: "Universal backlinks and prospect websites to evaluate",
-        owner: "Arsal Malik",
-        ownerEmail: "arsal73500@gmail.com",
-        createdAt: "2026-11-20T11:00:00.000Z",
-        updatedAt: now,
-        isStarred: false,
-        isArchived: false,
-        recordCount: 1,
-        activeSheetId: "tab_main",
-        sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 1 }],
-      },
-      tabsRecords: {
-        tab_main: [
-          {
-            ...createEmptyBacklink("hubspot.com"),
-            id: "bl_gen_01",
-            backlinkUrl: "https://blog.hubspot.com/marketing/community-resources",
-            status: "Pending",
-            category: "Resource Page",
-            domain: "hubspot.com",
-            dr: 93,
-            da: 92,
-            organicTraffic: 8900000,
-            anchorText: "Recommended Outreach Tools",
-            linkType: "Dofollow",
-            notes: "High authority target for editorial collaboration",
-          },
-        ],
-      },
-      settings: defaultSettings,
-    },
-  ];
+    ];
+    meta.activeSheetId = "tab_main";
+    modified = true;
+  }
+
+  if (!meta.activeSheetId && meta.sheets.length > 0) {
+    meta.activeSheetId = meta.sheets[0].id;
+    modified = true;
+  }
+
+  if (modified) {
+    fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), "utf-8");
+  }
+
+  return meta;
 }
 
-// ─── GitHub: create all files for a new spreadsheet ──────────────────────────
-async function ghCreateSpreadsheetFiles(
+function createSpreadsheetInternal(
   metadata: SpreadsheetMetadata,
-  tabsRecords: Record<string, BacklinkRecord[]>,
-  settings: SpreadsheetSettings,
-  token: string
-) {
-  const id = metadata.id;
-  const commitMsg = `feat(spreadsheet): seed "${metadata.title}" [${id}]`;
-
-  // Write metadata
-  await writeJsonToGitHub(GH.metadata(id), metadata, undefined, commitMsg, token).catch((e) =>
-    console.warn(`Could not write metadata for ${id}:`, e)
-  );
-
-  // Write settings
-  await writeJsonToGitHub(GH.settings(id), settings, undefined, commitMsg, token).catch((e) =>
-    console.warn(`Could not write settings for ${id}:`, e)
-  );
-
-  // Write each tab's records
-  for (const [tabId, records] of Object.entries(tabsRecords)) {
-    await writeJsonToGitHub(GH.tab(id, tabId), records, undefined, commitMsg, token).catch((e) =>
-      console.warn(`Could not write tab ${tabId} for ${id}:`, e)
-    );
-  }
-
-  // Write legacy backlinks.json (backwards compat)
-  const activeRecords = tabsRecords[metadata.activeSheetId || "tab_main"] || [];
-  await writeJsonToGitHub(GH.backlinks(id), activeRecords, undefined, commitMsg, token).catch(
-    () => {}
-  );
-}
-
-// ─── Local: create all files for a new spreadsheet ───────────────────────────
-function localCreateSpreadsheetFiles(
-  metadata: SpreadsheetMetadata,
-  tabsRecords: Record<string, BacklinkRecord[]>,
-  settings: SpreadsheetSettings
+  tabsRecords: Record<string, BacklinkRecord[]> = {},
+  settings: SpreadsheetSettings = { autoExtractDomain: true }
 ) {
   const sheetDir = path.join(SPREADSHEETS_DIR, metadata.id);
   const tabsDir = path.join(sheetDir, "tabs");
   ensureDir(sheetDir);
   ensureDir(tabsDir);
 
-  localWriteJson(path.join(sheetDir, "metadata.json"), metadata);
-  localWriteJson(path.join(sheetDir, "settings.json"), settings);
+  fs.writeFileSync(
+    path.join(sheetDir, "metadata.json"),
+    JSON.stringify(metadata, null, 2),
+    "utf-8"
+  );
+  fs.writeFileSync(
+    path.join(sheetDir, "settings.json"),
+    JSON.stringify(settings, null, 2),
+    "utf-8"
+  );
 
-  const activeRecords = tabsRecords[metadata.activeSheetId || "tab_main"] || [];
-  localWriteJson(path.join(sheetDir, "backlinks.json"), activeRecords);
+  // Write tabs records and backwards-compatible backlinks.json
+  const defaultTabRecords = tabsRecords[metadata.activeSheetId || "tab_main"] || [];
+  fs.writeFileSync(
+    path.join(sheetDir, "backlinks.json"),
+    JSON.stringify(defaultTabRecords, null, 2),
+    "utf-8"
+  );
 
   for (const [tabId, records] of Object.entries(tabsRecords)) {
-    localWriteJson(path.join(tabsDir, `${tabId}.json`), records);
+    fs.writeFileSync(
+      path.join(tabsDir, `${tabId}.json`),
+      JSON.stringify(records, null, 2),
+      "utf-8"
+    );
   }
 }
 
-// ─── listSpreadsheets ─────────────────────────────────────────────────────────
-export async function listSpreadsheets(
-  params?: {
-    workspaceId?: string;
-    starred?: boolean;
-    archived?: boolean;
-    search?: string;
-    sortBy?: "updatedAt" | "createdAt" | "title";
-  },
-  customToken?: string
-): Promise<SpreadsheetMetadata[]> {
-  const token = getToken(customToken);
-  await ensureInitialMigration(customToken);
+/**
+ * List all spreadsheets
+ */
+export async function listSpreadsheets(params?: {
+  workspaceId?: string;
+  starred?: boolean;
+  archived?: boolean;
+  search?: string;
+  sortBy?: "updatedAt" | "createdAt" | "title";
+}): Promise<SpreadsheetMetadata[]> {
+  ensureInitialMigration();
 
-  let allMeta: SpreadsheetMetadata[] = [];
+  const entries = fs.readdirSync(SPREADSHEETS_DIR, { withFileTypes: true });
+  const results: SpreadsheetMetadata[] = [];
 
-  if (isVercelProduction() || token) {
-    if (!token) return [];
-    // List from GitHub
-    const dirs = await listDirectoryFromGitHub(GH.spreadsheetsDir(), token);
-    for (const dir of dirs) {
-      if (dir.type !== "dir") continue;
-      try {
-        const meta = await ghNormalizeMetadata(dir.name, token);
-        allMeta.push(meta);
-      } catch (e) {
-        console.warn(`listSpreadsheets: could not load ${dir.name}:`, e);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const meta = normalizeSpreadsheetMetadata(entry.name);
+
+      if (params?.workspaceId && params.workspaceId !== "all" && meta.workspaceId !== params.workspaceId) {
+        continue;
       }
-    }
-  } else {
-    // Local filesystem
-    if (!localExists(SPREADSHEETS_DIR)) return [];
-    const entries = fs.readdirSync(SPREADSHEETS_DIR, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      try {
-        allMeta.push(localNormalizeMetadata(entry.name));
-      } catch (e) {
-        console.warn(`listSpreadsheets: could not load ${entry.name}:`, e);
+      if (params?.archived !== undefined) {
+        if (Boolean(meta.isArchived) !== params.archived) continue;
+      } else {
+        if (meta.isArchived) continue;
       }
+      if (params?.starred && !meta.isStarred) continue;
+      if (params?.search?.trim()) {
+        const q = params.search.toLowerCase().trim();
+        const matchesTitle = meta.title.toLowerCase().includes(q);
+        const matchesDesc = meta.description?.toLowerCase().includes(q) || false;
+        const matchesOwner = meta.owner.toLowerCase().includes(q);
+        if (!matchesTitle && !matchesDesc && !matchesOwner) continue;
+      }
+
+      results.push(meta);
+    } catch (e) {
+      console.warn(`Failed reading metadata for ${entry.name}:`, e);
     }
   }
-
-  // Apply filters
-  let results = allMeta.filter((meta) => {
-    if (params?.workspaceId && params.workspaceId !== "all" && meta.workspaceId !== params.workspaceId) return false;
-    if (params?.archived !== undefined) {
-      if (Boolean(meta.isArchived) !== params.archived) return false;
-    } else {
-      if (meta.isArchived) return false;
-    }
-    if (params?.starred && !meta.isStarred) return false;
-    if (params?.search?.trim()) {
-      const q = params.search.toLowerCase().trim();
-      const matchesTitle = meta.title.toLowerCase().includes(q);
-      const matchesDesc = meta.description?.toLowerCase().includes(q) || false;
-      const matchesOwner = meta.owner.toLowerCase().includes(q);
-      if (!matchesTitle && !matchesDesc && !matchesOwner) return false;
-    }
-    return true;
-  });
 
   const sortBy = params?.sortBy || "updatedAt";
   results.sort((a, b) => {
@@ -600,50 +388,17 @@ export async function listSpreadsheets(
   return results;
 }
 
-// ─── getSpreadsheet ───────────────────────────────────────────────────────────
+/**
+ * Get spreadsheet full data (metadata, records for active sheet tab, settings)
+ */
 export async function getSpreadsheet(
   id: string,
   customToken?: string,
   targetTabId?: string
 ): Promise<SpreadsheetFullData> {
-  const token = getToken(customToken);
-  await ensureInitialMigration(customToken);
+  ensureInitialMigration();
+  const metadata = normalizeSpreadsheetMetadata(id);
 
-  if (isVercelProduction() || token) {
-    if (!token) {
-      throw new Error("GITHUB_TOKEN is required. Add it in Vercel Project Settings → Environment Variables.");
-    }
-    return ghGetSpreadsheet(id, token, targetTabId);
-  }
-
-  return localGetSpreadsheet(id, targetTabId);
-}
-
-async function ghGetSpreadsheet(id: string, token: string, targetTabId?: string): Promise<SpreadsheetFullData> {
-  const metadata = await ghNormalizeMetadata(id, token);
-  const activeTabId = targetTabId || metadata.activeSheetId || metadata.sheets[0]?.id || "tab_main";
-
-  // Read records for the active tab
-  let records: BacklinkRecord[] = [];
-  let sha = "";
-  const tabResult = await ghReadTabRecords(id, activeTabId, token);
-  if (tabResult) {
-    records = tabResult.data;
-    sha = tabResult.sha;
-  } else {
-    // Fallback: try backlinks.json (legacy)
-    const legacyResult = await readBacklinksFromGitHub(GH.backlinks(id), token);
-    records = legacyResult.data;
-    sha = legacyResult.sha;
-  }
-
-  const settings = await ghReadSettings(id, token) || { autoExtractDomain: true };
-
-  return { metadata, records, settings, activeSheetId: activeTabId, sha, source: "github" };
-}
-
-function localGetSpreadsheet(id: string, targetTabId?: string): SpreadsheetFullData {
-  const metadata = localNormalizeMetadata(id);
   const sheetDir = path.join(SPREADSHEETS_DIR, id);
   const tabsDir = path.join(sheetDir, "tabs");
   ensureDir(tabsDir);
@@ -653,14 +408,46 @@ function localGetSpreadsheet(id: string, targetTabId?: string): SpreadsheetFullD
   const legacyFile = path.join(sheetDir, "backlinks.json");
 
   let records: BacklinkRecord[] = [];
-  if (localExists(tabFile)) {
-    records = localReadJson<BacklinkRecord[]>(tabFile) || [];
-  } else if (localExists(legacyFile)) {
-    records = localReadJson<BacklinkRecord[]>(legacyFile) || [];
-    localWriteJson(tabFile, records);
+  if (fs.existsSync(tabFile)) {
+    try {
+      records = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+    } catch {}
+  } else if (fs.existsSync(legacyFile)) {
+    try {
+      records = JSON.parse(fs.readFileSync(legacyFile, "utf-8"));
+      fs.writeFileSync(tabFile, JSON.stringify(records, null, 2), "utf-8");
+    } catch {}
   }
 
-  const settings = localReadJson<SpreadsheetSettings>(path.join(sheetDir, "settings.json")) || { autoExtractDomain: true };
+  let settings: SpreadsheetSettings = { autoExtractDomain: true };
+  const settingsFile = path.join(sheetDir, "settings.json");
+  if (fs.existsSync(settingsFile)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    } catch {}
+  }
+
+  // Check GitHub if token configured
+  const tokenToUse = customToken || getGitHubConfig().token;
+  if (tokenToUse) {
+    try {
+      const ghPath = `data/spreadsheets/${id}/tabs/${activeTabId}.json`;
+      const ghResult = await readBacklinksFromGitHub(ghPath, tokenToUse);
+      if (ghResult.data && Array.isArray(ghResult.data)) {
+        records = ghResult.data;
+        return {
+          metadata,
+          records,
+          settings,
+          activeSheetId: activeTabId,
+          sha: ghResult.sha,
+          source: "github",
+        };
+      }
+    } catch (e) {
+      // Local fallback
+    }
+  }
 
   return {
     metadata,
@@ -672,13 +459,16 @@ function localGetSpreadsheet(id: string, targetTabId?: string): SpreadsheetFullD
   };
 }
 
-// ─── createSpreadsheet ────────────────────────────────────────────────────────
+/**
+ * Create a new spreadsheet
+ */
 export async function createSpreadsheet(
   input: CreateSpreadsheetInput,
   ownerInfo: { name: string; email?: string },
   customToken?: string
 ): Promise<SpreadsheetFullData> {
-  const token = getToken(customToken);
+  ensureInitialMigration();
+
   const id = generateSpreadsheetId();
   const now = new Date().toISOString();
   const defaultTabId = "tab_main";
@@ -726,30 +516,31 @@ export async function createSpreadsheet(
     sheets: [defaultTab],
   };
 
-  const settings: SpreadsheetSettings = { autoExtractDomain: true };
-  const tabsRecords = { [defaultTabId]: initialRecords };
+  const settings: SpreadsheetSettings = {
+    autoExtractDomain: true,
+  };
 
-  if (isVercelProduction() || token) {
-    if (!token) {
-      throw new Error("GITHUB_TOKEN is required to create spreadsheets on Vercel.");
+  createSpreadsheetInternal(metadata, { [defaultTabId]: initialRecords }, settings);
+
+  const tokenToUse = customToken || getGitHubConfig().token;
+  let sha = `local-${Date.now()}`;
+  let source: "github" | "local" = "local";
+
+  if (tokenToUse) {
+    try {
+      const commitMsg = `feat(spreadsheet): create spreadsheet "${metadata.title}" [${metadata.id}]`;
+      const res = await writeBacklinksToGitHub(
+        `data/spreadsheets/${id}/tabs/${defaultTabId}.json`,
+        initialRecords,
+        undefined,
+        commitMsg,
+        tokenToUse
+      );
+      sha = res.sha;
+      source = "github";
+    } catch (e) {
+      console.warn("GitHub commit on create failed, saved locally:", e);
     }
-    await ghCreateSpreadsheetFiles(metadata, tabsRecords, settings, token);
-    return {
-      metadata,
-      records: initialRecords,
-      settings,
-      activeSheetId: defaultTabId,
-      sha: "",
-      source: "github",
-    };
-  }
-
-  localCreateSpreadsheetFiles(metadata, tabsRecords, settings);
-
-  // Also commit to GitHub if token available in local dev
-  if (token) {
-    await ghCreateSpreadsheetFiles(metadata, tabsRecords, settings, token);
-    return { metadata, records: initialRecords, settings, activeSheetId: defaultTabId, sha: "", source: "github" };
   }
 
   return {
@@ -757,12 +548,14 @@ export async function createSpreadsheet(
     records: initialRecords,
     settings,
     activeSheetId: defaultTabId,
-    sha: `local-${Date.now()}`,
-    source: "local",
+    sha,
+    source,
   };
 }
 
-// ─── saveSheetTabRecords ──────────────────────────────────────────────────────
+/**
+ * Save records for a specific sheet tab inside a spreadsheet
+ */
 export async function saveSheetTabRecords(
   spreadsheetId: string,
   tabId: string,
@@ -771,75 +564,56 @@ export async function saveSheetTabRecords(
   commitMessage?: string,
   customToken?: string
 ): Promise<{ success: boolean; sha: string; source: "github" | "local"; message: string }> {
-  const token = getToken(customToken);
-
-  if (isVercelProduction() && !token) {
-    throw new Error(
-      "GITHUB_TOKEN is required to save records on Vercel. Add it in Vercel Project Settings → Environment Variables."
-    );
-  }
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-
-    // Read current metadata from GitHub
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-
-    const metadata = applyDefaultSheets(metaResult.data);
-    const tabIndex = metadata.sheets.findIndex((s) => s.id === tabId);
-    if (tabIndex === -1) throw new Error(`Sheet tab "${tabId}" not found in spreadsheet "${spreadsheetId}".`);
-
-    // Write tab records
-    const tabGhPath = GH.tab(spreadsheetId, tabId);
-    const defaultMsg =
-      commitMessage ||
-      `chore(sheet): update "${metadata.title}" [${metadata.sheets[tabIndex].name} — ${records.length} records]`;
-    const writeRes = await writeBacklinksToGitHub(
-      tabGhPath,
-      records,
-      baseSha?.startsWith("local-") ? undefined : baseSha,
-      defaultMsg,
-      token
-    );
-
-    // Update metadata on GitHub
-    metadata.sheets[tabIndex].recordCount = records.length;
-    metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
-    metadata.updatedAt = new Date().toISOString();
-    await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-
-    // Update local cache if applicable
-    if (!isVercelProduction()) {
-      const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
-      localWriteJson(path.join(sheetDir, "tabs", `${tabId}.json`), records);
-      localWriteJson(path.join(sheetDir, "metadata.json"), metadata);
-      if (metadata.activeSheetId === tabId) {
-        localWriteJson(path.join(sheetDir, "backlinks.json"), records);
-      }
-    }
-
-    return { success: true, sha: writeRes.sha, source: "github", message: writeRes.message };
-  }
-
-  // Local-only
-  const metadata = localNormalizeMetadata(spreadsheetId);
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
   const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
   const tabsDir = path.join(sheetDir, "tabs");
   ensureDir(tabsDir);
 
   const tabIndex = metadata.sheets.findIndex((s) => s.id === tabId);
-  if (tabIndex === -1) throw new Error(`Sheet tab "${tabId}" not found in spreadsheet "${spreadsheetId}".`);
-
-  localWriteJson(path.join(tabsDir, `${tabId}.json`), records);
-  if (metadata.activeSheetId === tabId) {
-    localWriteJson(path.join(sheetDir, "backlinks.json"), records);
+  if (tabIndex === -1) {
+    throw new Error(`Sheet tab "${tabId}" not found in spreadsheet "${spreadsheetId}".`);
   }
 
+  // 1. Write tab records
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
+  fs.writeFileSync(tabFile, JSON.stringify(records, null, 2), "utf-8");
+
+  // Also sync to backlinks.json if active sheet for backwards compatibility
+  if (metadata.activeSheetId === tabId) {
+    fs.writeFileSync(path.join(sheetDir, "backlinks.json"), JSON.stringify(records, null, 2), "utf-8");
+  }
+
+  // 2. Update metadata tab count & overall count
   metadata.sheets[tabIndex].recordCount = records.length;
   metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
   metadata.updatedAt = new Date().toISOString();
-  localWriteJson(path.join(sheetDir, "metadata.json"), metadata);
+
+  const metaFile = path.join(sheetDir, "metadata.json");
+  fs.writeFileSync(metaFile, JSON.stringify(metadata, null, 2), "utf-8");
+
+  // 3. GitHub Commit
+  const tokenToUse = customToken || getGitHubConfig().token;
+  if (tokenToUse) {
+    const ghPath = `data/spreadsheets/${spreadsheetId}/tabs/${tabId}.json`;
+    const defaultMsg =
+      commitMessage ||
+      `chore(sheet): update "${metadata.title}" [${metadata.sheets[tabIndex].name} - ${records.length} records]`;
+
+    const writeRes = await writeBacklinksToGitHub(
+      ghPath,
+      records,
+      baseSha?.startsWith("local-") ? undefined : baseSha,
+      defaultMsg,
+      tokenToUse
+    );
+
+    return {
+      success: true,
+      sha: writeRes.sha,
+      source: "github",
+      message: writeRes.message,
+    };
+  }
 
   return {
     success: true,
@@ -849,7 +623,9 @@ export async function saveSheetTabRecords(
   };
 }
 
-// ─── saveSpreadsheetRecords (backwards-compat wrapper) ───────────────────────
+/**
+ * Backwards-compatible save for entire spreadsheet root (saves to active tab)
+ */
 export async function saveSpreadsheetRecords(
   spreadsheetId: string,
   records: BacklinkRecord[],
@@ -857,345 +633,306 @@ export async function saveSpreadsheetRecords(
   commitMessage?: string,
   customToken?: string
 ) {
-  const token = getToken(customToken);
-  let activeTabId: string;
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const meta = await ghNormalizeMetadata(spreadsheetId, token);
-    activeTabId = meta.activeSheetId || meta.sheets[0]?.id || "tab_main";
-  } else {
-    const meta = localNormalizeMetadata(spreadsheetId);
-    activeTabId = meta.activeSheetId || meta.sheets[0]?.id || "tab_main";
-  }
-
-  return saveSheetTabRecords(spreadsheetId, activeTabId, records, baseSha, commitMessage, customToken);
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const activeTabId = metadata.activeSheetId || metadata.sheets[0]?.id || "tab_main";
+  return saveSheetTabRecords(
+    spreadsheetId,
+    activeTabId,
+    records,
+    baseSha,
+    commitMessage,
+    customToken
+  );
 }
 
-// ─── addSheetTab ──────────────────────────────────────────────────────────────
+/**
+ * Add a new sheet tab to a spreadsheet
+ */
 export async function addSheetTab(
   spreadsheetId: string,
   tabName?: string,
   initialRecords: BacklinkRecord[] = [],
   customToken?: string
 ): Promise<{ metadata: SpreadsheetMetadata; newTab: SheetTab }> {
-  const token = getToken(customToken);
-  const newTabId = generateSheetTabId();
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const metadata = applyDefaultSheets(metaResult.data);
-
-    const nextOrder = metadata.sheets.length;
-    const name = tabName?.trim() || `Sheet ${metadata.sheets.length + 1}`;
-    const newTab: SheetTab = { id: newTabId, name, order: nextOrder, recordCount: initialRecords.length };
-
-    // Write new tab records
-    await writeJsonToGitHub(
-      GH.tab(spreadsheetId, newTabId),
-      initialRecords,
-      undefined,
-      `feat(sheet-tab): add sheet "${name}" in "${metadata.title}"`,
-      token
-    );
-
-    // Update metadata
-    metadata.sheets.push(newTab);
-    metadata.activeSheetId = newTabId;
-    metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
-    metadata.updatedAt = new Date().toISOString();
-    await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-
-    return { metadata, newTab };
-  }
-
-  const metadata = localNormalizeMetadata(spreadsheetId);
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
   const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
   const tabsDir = path.join(sheetDir, "tabs");
   ensureDir(tabsDir);
 
+  const newTabId = generateSheetTabId();
   const nextOrder = metadata.sheets.length;
   const name = tabName?.trim() || `Sheet ${metadata.sheets.length + 1}`;
-  const newTab: SheetTab = { id: newTabId, name, order: nextOrder, recordCount: initialRecords.length };
 
-  localWriteJson(path.join(tabsDir, `${newTabId}.json`), initialRecords);
+  const newTab: SheetTab = {
+    id: newTabId,
+    name,
+    order: nextOrder,
+    recordCount: initialRecords.length,
+  };
 
+  // Write tab records
+  fs.writeFileSync(
+    path.join(tabsDir, `${newTabId}.json`),
+    JSON.stringify(initialRecords, null, 2),
+    "utf-8"
+  );
+
+  // Update metadata
   metadata.sheets.push(newTab);
   metadata.activeSheetId = newTabId;
   metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
   metadata.updatedAt = new Date().toISOString();
-  localWriteJson(path.join(sheetDir, "metadata.json"), metadata);
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
+  // GitHub commit
+  const tokenToUse = customToken || getGitHubConfig().token;
+  if (tokenToUse) {
+    try {
+      await writeBacklinksToGitHub(
+        `data/spreadsheets/${spreadsheetId}/tabs/${newTabId}.json`,
+        initialRecords,
+        undefined,
+        `feat(sheet-tab): add sheet "${name}" in "${metadata.title}"`,
+        tokenToUse
+      );
+    } catch (e) {
+      console.warn("GitHub commit for new sheet tab failed:", e);
+    }
+  }
 
   return { metadata, newTab };
 }
 
-// ─── renameSheetTab ───────────────────────────────────────────────────────────
+/**
+ * Rename a sheet tab
+ */
 export async function renameSheetTab(
   spreadsheetId: string,
   tabId: string,
   newName: string,
   customToken?: string
 ): Promise<SpreadsheetMetadata> {
-  const token = getToken(customToken);
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const metadata = applyDefaultSheets(metaResult.data);
-    const target = metadata.sheets.find((s) => s.id === tabId);
-    if (!target) throw new Error(`Sheet tab "${tabId}" not found.`);
-    target.name = newName.trim();
-    metadata.updatedAt = new Date().toISOString();
-    await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-    return metadata;
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const target = metadata.sheets.find((s) => s.id === tabId);
+  if (!target) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
   }
 
-  const metadata = localNormalizeMetadata(spreadsheetId);
-  const target = metadata.sheets.find((s) => s.id === tabId);
-  if (!target) throw new Error(`Sheet tab "${tabId}" not found.`);
   target.name = newName.trim();
   metadata.updatedAt = new Date().toISOString();
-  localWriteJson(path.join(SPREADSHEETS_DIR, spreadsheetId, "metadata.json"), metadata);
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
   return metadata;
 }
 
-// ─── duplicateSheetTab ────────────────────────────────────────────────────────
+/**
+ * Duplicate a sheet tab (clones tab and its records)
+ */
 export async function duplicateSheetTab(
   spreadsheetId: string,
   tabId: string,
   customToken?: string
 ): Promise<{ metadata: SpreadsheetMetadata; clonedTab: SheetTab }> {
-  const token = getToken(customToken);
-  let records: BacklinkRecord[] = [];
-  let sourceName = "Sheet";
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const meta = applyDefaultSheets(metaResult.data);
-    const target = meta.sheets.find((s) => s.id === tabId);
-    if (!target) throw new Error(`Sheet tab "${tabId}" not found.`);
-    sourceName = target.name;
-    const tabResult = await ghReadTabRecords(spreadsheetId, tabId, token);
-    records = tabResult?.data || [];
-  } else {
-    const meta = localNormalizeMetadata(spreadsheetId);
-    const target = meta.sheets.find((s) => s.id === tabId);
-    if (!target) throw new Error(`Sheet tab "${tabId}" not found.`);
-    sourceName = target.name;
-    const tabFile = path.join(SPREADSHEETS_DIR, spreadsheetId, "tabs", `${tabId}.json`);
-    records = localReadJson<BacklinkRecord[]>(tabFile) || [];
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const target = metadata.sheets.find((s) => s.id === tabId);
+  if (!target) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
   }
 
-  const result = await addSheetTab(spreadsheetId, `${sourceName} (Copy)`, records, customToken);
-  return { metadata: result.metadata, clonedTab: result.newTab };
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
+
+  let records: BacklinkRecord[] = [];
+  if (fs.existsSync(tabFile)) {
+    try {
+      records = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+    } catch {}
+  }
+
+  const result = await addSheetTab(
+    spreadsheetId,
+    `${target.name} (Copy)`,
+    records,
+    customToken
+  );
+
+  return {
+    metadata: result.metadata,
+    clonedTab: result.newTab,
+  };
 }
 
-// ─── deleteSheetTab ───────────────────────────────────────────────────────────
+/**
+ * Delete a sheet tab with protection against deleting the last remaining sheet
+ */
 export async function deleteSheetTab(
   spreadsheetId: string,
   tabId: string,
   customToken?: string
 ): Promise<SpreadsheetMetadata> {
-  const token = getToken(customToken);
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
 
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const metadata = applyDefaultSheets(metaResult.data);
-
-    if (metadata.sheets.length <= 1) {
-      throw new Error("Cannot delete the only sheet tab. Create a replacement sheet first.");
-    }
-    const index = metadata.sheets.findIndex((s) => s.id === tabId);
-    if (index === -1) throw new Error(`Sheet tab "${tabId}" not found.`);
-
-    // Delete tab file from GitHub
-    await deleteFileFromGitHub(
-      GH.tab(spreadsheetId, tabId),
-      undefined,
-      `chore(sheet-tab): delete tab "${tabId}" from "${metadata.title}"`,
-      token
-    );
-
-    metadata.sheets.splice(index, 1);
-    if (metadata.activeSheetId === tabId) {
-      metadata.activeSheetId = metadata.sheets[Math.max(0, index - 1)].id;
-    }
-    metadata.sheets.forEach((s, i) => { s.order = i; });
-    metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
-    metadata.updatedAt = new Date().toISOString();
-    await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-    return metadata;
-  }
-
-  const metadata = localNormalizeMetadata(spreadsheetId);
   if (metadata.sheets.length <= 1) {
-    throw new Error("Cannot delete the only sheet tab. Create a replacement sheet first.");
+    throw new Error("Cannot delete the only sheet tab in the spreadsheet. Create a replacement sheet first.");
   }
+
   const index = metadata.sheets.findIndex((s) => s.id === tabId);
-  if (index === -1) throw new Error(`Sheet tab "${tabId}" not found.`);
+  if (index === -1) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
+  }
 
-  const tabFile = path.join(SPREADSHEETS_DIR, spreadsheetId, "tabs", `${tabId}.json`);
-  localRemove(tabFile);
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
 
+  // Remove file
+  if (fs.existsSync(tabFile)) {
+    fs.rmSync(tabFile, { force: true });
+  }
+
+  // Remove from metadata
   metadata.sheets.splice(index, 1);
+
+  // If deleted active tab, activate nearest tab
   if (metadata.activeSheetId === tabId) {
     metadata.activeSheetId = metadata.sheets[Math.max(0, index - 1)].id;
   }
-  metadata.sheets.forEach((s, i) => { s.order = i; });
+
+  // Normalize order
+  metadata.sheets.forEach((s, i) => {
+    s.order = i;
+  });
+
   metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
   metadata.updatedAt = new Date().toISOString();
-  localWriteJson(path.join(SPREADSHEETS_DIR, spreadsheetId, "metadata.json"), metadata);
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
   return metadata;
 }
 
-// ─── reorderSheetTabs ─────────────────────────────────────────────────────────
+/**
+ * Reorder sheet tabs using new order array of tab IDs
+ */
 export async function reorderSheetTabs(
   spreadsheetId: string,
   tabIdsInNewOrder: string[],
   customToken?: string
 ): Promise<SpreadsheetMetadata> {
-  const token = getToken(customToken);
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
 
-  async function applyReorder(metadata: SpreadsheetMetadata): Promise<SpreadsheetMetadata> {
-    const reordered: SheetTab[] = [];
-    tabIdsInNewOrder.forEach((tid, idx) => {
-      const found = metadata.sheets.find((s) => s.id === tid);
-      if (found) reordered.push({ ...found, order: idx });
-    });
-    metadata.sheets.forEach((s) => {
-      if (!reordered.some((r) => r.id === s.id)) reordered.push({ ...s, order: reordered.length });
-    });
-    metadata.sheets = reordered;
-    metadata.updatedAt = new Date().toISOString();
-    return metadata;
-  }
+  const reordered: SheetTab[] = [];
+  tabIdsInNewOrder.forEach((tid, idx) => {
+    const found = metadata.sheets.find((s) => s.id === tid);
+    if (found) {
+      reordered.push({ ...found, order: idx });
+    }
+  });
 
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const metadata = await applyReorder(applyDefaultSheets(metaResult.data));
-    await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-    return metadata;
-  }
+  // Add any missing
+  metadata.sheets.forEach((s) => {
+    if (!reordered.some((r) => r.id === s.id)) {
+      reordered.push({ ...s, order: reordered.length });
+    }
+  });
 
-  const metadata = await applyReorder(localNormalizeMetadata(spreadsheetId));
-  localWriteJson(path.join(SPREADSHEETS_DIR, spreadsheetId, "metadata.json"), metadata);
+  metadata.sheets = reordered;
+  metadata.updatedAt = new Date().toISOString();
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
   return metadata;
 }
 
-// ─── setActiveSheetTab ────────────────────────────────────────────────────────
-export async function setActiveSheetTab(
-  spreadsheetId: string,
-  tabId: string,
-  customToken?: string
-): Promise<SpreadsheetMetadata> {
-  const token = getToken(customToken);
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(spreadsheetId, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${spreadsheetId}" not found.`);
-    const metadata = applyDefaultSheets(metaResult.data);
-    if (metadata.sheets.some((s) => s.id === tabId)) {
-      metadata.activeSheetId = tabId;
-      metadata.updatedAt = new Date().toISOString();
-      await ghWriteMetadata(spreadsheetId, metadata, token, metaResult.sha);
-    }
-    return metadata;
-  }
-
-  const metadata = localNormalizeMetadata(spreadsheetId);
+/**
+ * Set active sheet tab
+ */
+export async function setActiveSheetTab(spreadsheetId: string, tabId: string): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
   if (metadata.sheets.some((s) => s.id === tabId)) {
     metadata.activeSheetId = tabId;
-    localWriteJson(path.join(SPREADSHEETS_DIR, spreadsheetId, "metadata.json"), metadata);
+    const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+    fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
   }
   return metadata;
 }
 
-// ─── exportEntireSpreadsheet ──────────────────────────────────────────────────
-export async function exportEntireSpreadsheet(spreadsheetId: string, customToken?: string) {
-  const token = getToken(customToken);
-  let metadata: SpreadsheetMetadata;
+/**
+ * Export entire spreadsheet (all sheets + metadata + records)
+ */
+export async function exportEntireSpreadsheet(spreadsheetId: string) {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+
   const sheetsData: Record<string, { tab: SheetTab; records: BacklinkRecord[] }> = {};
 
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    metadata = await ghNormalizeMetadata(spreadsheetId, token);
-    for (const tab of metadata.sheets) {
-      const result = await ghReadTabRecords(spreadsheetId, tab.id, token);
-      sheetsData[tab.id] = { tab, records: result?.data || [] };
+  for (const tab of metadata.sheets) {
+    const tabFile = path.join(tabsDir, `${tab.id}.json`);
+    let recs: BacklinkRecord[] = [];
+    if (fs.existsSync(tabFile)) {
+      try {
+        recs = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+      } catch {}
     }
-  } else {
-    metadata = localNormalizeMetadata(spreadsheetId);
-    const tabsDir = path.join(SPREADSHEETS_DIR, spreadsheetId, "tabs");
-    for (const tab of metadata.sheets) {
-      const records = localReadJson<BacklinkRecord[]>(path.join(tabsDir, `${tab.id}.json`)) || [];
-      sheetsData[tab.id] = { tab, records };
-    }
+    sheetsData[tab.id] = { tab, records: recs };
   }
 
-  return { metadata, sheets: sheetsData, exportedAt: new Date().toISOString() };
+  return {
+    metadata,
+    sheets: sheetsData,
+    exportedAt: new Date().toISOString(),
+  };
 }
 
-// ─── updateSpreadsheetMetadata ────────────────────────────────────────────────
+/**
+ * Update spreadsheet metadata
+ */
 export async function updateSpreadsheetMetadata(
   id: string,
   updates: Partial<SpreadsheetMetadata> & { settings?: Partial<SpreadsheetSettings> },
   customToken?: string
 ): Promise<SpreadsheetMetadata> {
-  const token = getToken(customToken);
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    const metaResult = await ghReadMetadata(id, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${id}" not found.`);
-    const updatedMeta: SpreadsheetMetadata = {
-      ...applyDefaultSheets(metaResult.data),
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    await ghWriteMetadata(id, updatedMeta, token, metaResult.sha);
-
-    if (updates.settings) {
-      const curSettings = await ghReadSettings(id, token) || { autoExtractDomain: true };
-      await writeJsonToGitHub(GH.settings(id), { ...curSettings, ...updates.settings }, undefined, `chore(settings): update settings for "${updatedMeta.title}"`, token);
-    }
-    return updatedMeta;
-  }
-
+  const metadata = normalizeSpreadsheetMetadata(id);
   const sheetDir = path.join(SPREADSHEETS_DIR, id);
-  const metadata = localNormalizeMetadata(id);
+
   const updatedMeta: SpreadsheetMetadata = {
     ...metadata,
     ...updates,
     updatedAt: new Date().toISOString(),
   };
-  localWriteJson(path.join(sheetDir, "metadata.json"), updatedMeta);
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(updatedMeta, null, 2), "utf-8");
 
   if (updates.settings) {
     const settingsFile = path.join(sheetDir, "settings.json");
-    const curSettings = localReadJson<SpreadsheetSettings>(settingsFile) || { autoExtractDomain: true };
-    localWriteJson(settingsFile, { ...curSettings, ...updates.settings });
+    let curSettings: SpreadsheetSettings = { autoExtractDomain: true };
+    if (fs.existsSync(settingsFile)) {
+      try {
+        curSettings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+      } catch {}
+    }
+    const mergedSettings = { ...curSettings, ...updates.settings };
+    fs.writeFileSync(settingsFile, JSON.stringify(mergedSettings, null, 2), "utf-8");
   }
+
   return updatedMeta;
 }
 
-// ─── duplicateSpreadsheet ─────────────────────────────────────────────────────
+/**
+ * Duplicate a spreadsheet
+ */
 export async function duplicateSpreadsheet(
   id: string,
   newTitle?: string,
   ownerName = "Arsal Malik",
   customToken?: string
 ): Promise<SpreadsheetFullData> {
-  const token = getToken(customToken);
   const original = await getSpreadsheet(id, customToken);
   const newId = generateSpreadsheetId();
   const now = new Date().toISOString();
@@ -1213,75 +950,55 @@ export async function duplicateSpreadsheet(
   };
 
   const tabsRecords: Record<string, BacklinkRecord[]> = {};
+  const sheetDir = path.join(SPREADSHEETS_DIR, id);
+  const tabsDir = path.join(sheetDir, "tabs");
 
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    for (const tab of original.metadata.sheets) {
-      const result = await ghReadTabRecords(id, tab.id, token);
-      tabsRecords[tab.id] = result?.data || [];
+  for (const tab of original.metadata.sheets) {
+    const tabFile = path.join(tabsDir, `${tab.id}.json`);
+    let recs: BacklinkRecord[] = [];
+    if (fs.existsSync(tabFile)) {
+      try {
+        recs = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+      } catch {}
     }
-    await ghCreateSpreadsheetFiles(metadata, tabsRecords, original.settings, token);
-  } else {
-    const tabsDir = path.join(SPREADSHEETS_DIR, id, "tabs");
-    for (const tab of original.metadata.sheets) {
-      tabsRecords[tab.id] = localReadJson<BacklinkRecord[]>(path.join(tabsDir, `${tab.id}.json`)) || [];
-    }
-    localCreateSpreadsheetFiles(metadata, tabsRecords, original.settings);
+    tabsRecords[tab.id] = recs;
   }
 
-  const activeRecords = tabsRecords[metadata.activeSheetId || "tab_main"] || [];
+  createSpreadsheetInternal(metadata, tabsRecords, original.settings);
+
   return {
     metadata,
-    records: activeRecords,
+    records: tabsRecords[metadata.activeSheetId || "tab_main"] || [],
     settings: original.settings,
     activeSheetId: metadata.activeSheetId || "tab_main",
     sha: `local-${Date.now()}`,
-    source: token ? "github" : "local",
+    source: "local",
   };
 }
 
-// ─── deleteSpreadsheet ────────────────────────────────────────────────────────
+/**
+ * Permanently delete a spreadsheet
+ */
 export async function deleteSpreadsheet(id: string, customToken?: string): Promise<boolean> {
-  const token = getToken(customToken);
-
-  if (isVercelProduction() || token) {
-    if (!token) throw new Error("GITHUB_TOKEN is required.");
-    // Delete metadata, settings, backlinks, and all tab files via GitHub
-    const metaResult = await ghReadMetadata(id, token);
-    if (!metaResult) throw new Error(`Spreadsheet "${id}" not found.`);
-    const metadata = applyDefaultSheets(metaResult.data);
-
-    // Delete each tab file
-    for (const tab of metadata.sheets) {
-      await deleteFileFromGitHub(GH.tab(id, tab.id), undefined, `chore(spreadsheet): delete "${metadata.title}" [${id}]`, token).catch(() => {});
-    }
-    // Delete core files
-    for (const ghPath of [GH.backlinks(id), GH.settings(id), GH.metadata(id)]) {
-      await deleteFileFromGitHub(ghPath, undefined, `chore(spreadsheet): delete "${metadata.title}" [${id}]`, token).catch(() => {});
-    }
-    return true;
+  const sheetDir = path.join(SPREADSHEETS_DIR, id);
+  if (!fs.existsSync(sheetDir)) {
+    throw new Error(`Spreadsheet "${id}" not found.`);
   }
 
-  const sheetDir = path.join(SPREADSHEETS_DIR, id);
-  if (!localExists(sheetDir)) throw new Error(`Spreadsheet "${id}" not found.`);
-  localRemoveDir(sheetDir);
+  fs.rmSync(sheetDir, { recursive: true, force: true });
   return true;
 }
 
-// ─── recordSpreadsheetOpened ──────────────────────────────────────────────────
-export function recordSpreadsheetOpened(id: string, customToken?: string) {
-  // Fire-and-forget; only update local cache in development to avoid slowing navigation
-  if (!isVercelProduction()) {
-    const metaFile = path.join(SPREADSHEETS_DIR, id, "metadata.json");
-    if (localExists(metaFile)) {
-      try {
-        const meta = localReadJson<SpreadsheetMetadata>(metaFile);
-        if (meta) {
-          meta.lastOpenedAt = new Date().toISOString();
-          localWriteJson(metaFile, meta);
-        }
-      } catch {}
-    }
+/**
+ * Record spreadsheet opened timestamp
+ */
+export function recordSpreadsheetOpened(id: string) {
+  const metaFile = path.join(SPREADSHEETS_DIR, id, "metadata.json");
+  if (fs.existsSync(metaFile)) {
+    try {
+      const meta: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+      meta.lastOpenedAt = new Date().toISOString();
+      fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), "utf-8");
+    } catch {}
   }
-  // On Vercel, we skip this since it would be a GitHub commit on every page open — too expensive
 }

@@ -9,8 +9,14 @@ export async function POST(
   { params }: { params: { id: string; sheetId: string } }
 ) {
   const { id, sheetId } = params;
-  const auth = await getApiAuthContext(req, "canEdit");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canEdit")) {
+    return NextResponse.json(
+      { error: "Forbidden: Viewer role cannot edit sheet records." },
+      { status: 403 }
+    );
+  }
 
   try {
     const body = await req.json();
@@ -48,7 +54,7 @@ export async function POST(
 
     let finalRecords = validatedRecords;
     if (mode === "append") {
-      const current = await getSpreadsheet(id, auth.customToken, sheetId);
+      const current = await getSpreadsheet(id, customToken, sheetId);
       const existingUrls = new Set(
         current.records.map((r) => r.backlinkUrl?.toLowerCase().trim())
       );
@@ -64,7 +70,7 @@ export async function POST(
       finalRecords,
       baseSha,
       commitMessage,
-      auth.customToken
+      customToken
     );
 
     return NextResponse.json({

@@ -8,11 +8,17 @@ export async function POST(
   { params }: { params: { id: string; sheetId: string } }
 ) {
   const { id, sheetId } = params;
-  const auth = await getApiAuthContext(req, "canAdd");
-  if (auth.errorResponse) return auth.errorResponse;
+  const { role, customToken } = getApiAuthContext(req);
+
+  if (!hasPermission(role, "canAdd")) {
+    return NextResponse.json(
+      { error: "Forbidden: Viewer role cannot duplicate sheet tabs." },
+      { status: 403 }
+    );
+  }
 
   try {
-    const result = await duplicateSheetTab(id, sheetId, auth.customToken);
+    const result = await duplicateSheetTab(id, sheetId, customToken);
     return NextResponse.json(
       {
         success: true,
