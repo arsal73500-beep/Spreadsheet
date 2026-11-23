@@ -6,6 +6,8 @@ import {
   SpreadsheetFullData,
   CreateSpreadsheetInput,
   generateSpreadsheetId,
+  generateSheetTabId,
+  SheetTab,
   WORKSPACES,
 } from "./spreadsheet-schema";
 import { BacklinkRecord, createEmptyBacklink } from "./schema";
@@ -33,19 +35,21 @@ export function ensureInitialMigration() {
   ensureDir(SPREADSHEETS_DIR);
   ensureDir(WORKSPACES_DIR);
 
-  // Write workspaces.json if not present
   const wsFile = path.join(WORKSPACES_DIR, "workspaces.json");
   if (!fs.existsSync(wsFile)) {
     fs.writeFileSync(wsFile, JSON.stringify(WORKSPACES, null, 2), "utf-8");
   }
 
-  // Check if any spreadsheets exist
   const existingDirs = fs
     .readdirSync(SPREADSHEETS_DIR, { withFileTypes: true })
     .filter((d) => d.isDirectory());
 
   if (existingDirs.length > 0) {
-    return; // Already initialized
+    // Ensure all existing sheets have the `sheets` array in metadata
+    for (const dir of existingDirs) {
+      normalizeSpreadsheetMetadata(dir.name);
+    }
+    return;
   }
 
   // 1. Migrate MD Health Center
@@ -69,8 +73,31 @@ export function ensureInitialMigration() {
       isStarred: true,
       isArchived: false,
       recordCount: mdRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [
+        { id: "tab_main", name: "Live Backlinks", order: 0, recordCount: mdRecords.length },
+        { id: "tab_guest_posts", name: "Guest Posts Pipeline", order: 1, recordCount: 1 },
+      ],
     },
-    mdRecords
+    {
+      tab_main: mdRecords,
+      tab_guest_posts: [
+        {
+          ...createEmptyBacklink("medicaljournalonline.org"),
+          id: "bl_md_gp_01",
+          backlinkUrl: "https://medicaljournalonline.org/preventive-screenings",
+          status: "Submitted",
+          category: "Guest Post",
+          domain: "medicaljournalonline.org",
+          dr: 72,
+          da: 68,
+          organicTraffic: 140000,
+          anchorText: "MD Health Center Research",
+          linkType: "Dofollow",
+          notes: "Editorial draft under review",
+        },
+      ],
+    }
   );
 
   // MD Health Center secondary sheet: Local Citations
@@ -87,40 +114,44 @@ export function ensureInitialMigration() {
       isStarred: false,
       isArchived: false,
       recordCount: 2,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 2 }],
     },
-    [
-      {
-        ...createEmptyBacklink("google.com/business"),
-        id: "bl_md_cit_01",
-        backlinkUrl: "https://google.com/business/md-health-center",
-        status: "Live",
-        category: "Local Directory",
-        domain: "google.com",
-        dr: 98,
-        da: 98,
-        organicTraffic: 5000000,
-        anchorText: "MD Health Center Clinics",
-        linkType: "Dofollow",
-        notes: "Google Business Profile primary listing",
-      },
-      {
-        ...createEmptyBacklink("bingplaces.com"),
-        id: "bl_md_cit_02",
-        backlinkUrl: "https://bingplaces.com/md-health-center",
-        status: "Submitted",
-        category: "Local Directory",
-        domain: "bingplaces.com",
-        dr: 92,
-        da: 90,
-        organicTraffic: 1200000,
-        anchorText: "MD Health Center",
-        linkType: "Dofollow",
-        notes: "Bing Places verification submitted",
-      },
-    ]
+    {
+      tab_main: [
+        {
+          ...createEmptyBacklink("google.com/business"),
+          id: "bl_md_cit_01",
+          backlinkUrl: "https://google.com/business/md-health-center",
+          status: "Live",
+          category: "Local Directory",
+          domain: "google.com",
+          dr: 98,
+          da: 98,
+          organicTraffic: 5000000,
+          anchorText: "MD Health Center Clinics",
+          linkType: "Dofollow",
+          notes: "Google Business Profile primary listing",
+        },
+        {
+          ...createEmptyBacklink("bingplaces.com"),
+          id: "bl_md_cit_02",
+          backlinkUrl: "https://bingplaces.com/md-health-center",
+          status: "Submitted",
+          category: "Local Directory",
+          domain: "bingplaces.com",
+          dr: 92,
+          da: 90,
+          organicTraffic: 1200000,
+          anchorText: "MD Health Center",
+          linkType: "Dofollow",
+          notes: "Bing Places verification submitted",
+        },
+      ],
+    }
   );
 
-  // 2. Migrate AINT Foundation
+  // 2. AINT Foundation
   const legacyAint = path.join(DATA_DIR, "aint-foundation", "backlinks.json");
   let aintRecords: BacklinkRecord[] = [];
   if (fs.existsSync(legacyAint)) {
@@ -141,44 +172,13 @@ export function ensureInitialMigration() {
       isStarred: true,
       isArchived: false,
       recordCount: aintRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: aintRecords.length }],
     },
-    aintRecords
+    { tab_main: aintRecords }
   );
 
-  // AINT Foundation secondary sheet: Mental Health Directories
-  createSpreadsheetInternal(
-    {
-      id: "sheet_aint_mental_02",
-      title: "AINT Foundation — Mental Health Directories",
-      workspaceId: "aint-foundation",
-      description: "UK charity and mental health outreach community citations",
-      owner: "SEO Team Editor",
-      ownerEmail: "seo-team@backlinkmanager.internal",
-      createdAt: "2026-11-05T12:00:00.000Z",
-      updatedAt: new Date().toISOString(),
-      isStarred: false,
-      isArchived: false,
-      recordCount: 1,
-    },
-    [
-      {
-        ...createEmptyBacklink("mind.org.uk"),
-        id: "bl_aint_m_01",
-        backlinkUrl: "https://mind.org.uk/community-partners/aint-cic",
-        status: "Submitted",
-        category: "Organization Profile",
-        domain: "mind.org.uk",
-        dr: 81,
-        da: 76,
-        organicTraffic: 350000,
-        anchorText: "AINT Foundation CIC Outreach",
-        linkType: "Dofollow",
-        notes: "Partner resource listing under evaluation",
-      },
-    ]
-  );
-
-  // 3. Migrate Dr Irshad Malik
+  // 3. Dr Irshad Malik
   const legacyDr = path.join(DATA_DIR, "dr-irshad-malik", "backlinks.json");
   let drRecords: BacklinkRecord[] = [];
   if (fs.existsSync(legacyDr)) {
@@ -199,41 +199,10 @@ export function ensureInitialMigration() {
       isStarred: true,
       isArchived: false,
       recordCount: drRecords.length,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: drRecords.length }],
     },
-    drRecords
-  );
-
-  // Dr Irshad Malik secondary sheet: Healthcare Outreach
-  createSpreadsheetInternal(
-    {
-      id: "sheet_dr_outreach_02",
-      title: "Dr. Irshad Malik — Healthcare Outreach",
-      workspaceId: "dr-irshad-malik",
-      description: "Podcast appearances, ENT surgical Q&A forums and journals",
-      owner: "Arsal Malik",
-      ownerEmail: "arsal73500@gmail.com",
-      createdAt: "2026-11-12T14:00:00.000Z",
-      updatedAt: new Date().toISOString(),
-      isStarred: false,
-      isArchived: false,
-      recordCount: 1,
-    },
-    [
-      {
-        ...createEmptyBacklink("entnet.org"),
-        id: "bl_dr_out_01",
-        backlinkUrl: "https://entnet.org/clinical-directory/dr-irshad-malik",
-        status: "Live",
-        category: "Business Profile",
-        domain: "entnet.org",
-        dr: 79,
-        da: 74,
-        organicTraffic: 210000,
-        anchorText: "Dr. Irshad Malik ENT Clinical Consultant",
-        linkType: "Dofollow",
-        notes: "Global Otolaryngology association directory",
-      },
-    ]
+    { tab_main: drRecords }
   );
 
   // 4. General Spreadsheet
@@ -250,41 +219,97 @@ export function ensureInitialMigration() {
       isStarred: false,
       isArchived: false,
       recordCount: 1,
+      activeSheetId: "tab_main",
+      sheets: [{ id: "tab_main", name: "Sheet 1", order: 0, recordCount: 1 }],
     },
-    [
-      {
-        ...createEmptyBacklink("hubspot.com"),
-        id: "bl_gen_01",
-        backlinkUrl: "https://blog.hubspot.com/marketing/community-resources",
-        status: "Pending",
-        category: "Resource Page",
-        domain: "hubspot.com",
-        dr: 93,
-        da: 92,
-        organicTraffic: 8900000,
-        anchorText: "Recommended Outreach Tools",
-        linkType: "Dofollow",
-        notes: "High authority target for editorial collaboration",
-      },
-    ]
+    {
+      tab_main: [
+        {
+          ...createEmptyBacklink("hubspot.com"),
+          id: "bl_gen_01",
+          backlinkUrl: "https://blog.hubspot.com/marketing/community-resources",
+          status: "Pending",
+          category: "Resource Page",
+          domain: "hubspot.com",
+          dr: 93,
+          da: 92,
+          organicTraffic: 8900000,
+          anchorText: "Recommended Outreach Tools",
+          linkType: "Dofollow",
+          notes: "High authority target for editorial collaboration",
+        },
+      ],
+    }
   );
+}
+
+/**
+ * Ensure spreadsheet metadata has `sheets` array & `activeSheetId`
+ */
+function normalizeSpreadsheetMetadata(spreadsheetId: string): SpreadsheetMetadata {
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const metaFile = path.join(sheetDir, "metadata.json");
+  if (!fs.existsSync(metaFile)) {
+    throw new Error(`Spreadsheet "${spreadsheetId}" metadata not found.`);
+  }
+
+  const meta: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+  let modified = false;
+
+  if (!Array.isArray(meta.sheets) || meta.sheets.length === 0) {
+    const tabsDir = path.join(sheetDir, "tabs");
+    ensureDir(tabsDir);
+
+    let defaultRecords: BacklinkRecord[] = [];
+    const rootRecords = path.join(sheetDir, "backlinks.json");
+    if (fs.existsSync(rootRecords)) {
+      try {
+        defaultRecords = JSON.parse(fs.readFileSync(rootRecords, "utf-8"));
+      } catch {}
+    }
+
+    const tabMainPath = path.join(tabsDir, "tab_main.json");
+    if (!fs.existsSync(tabMainPath)) {
+      fs.writeFileSync(tabMainPath, JSON.stringify(defaultRecords, null, 2), "utf-8");
+    }
+
+    meta.sheets = [
+      {
+        id: "tab_main",
+        name: "Sheet 1",
+        order: 0,
+        recordCount: defaultRecords.length,
+      },
+    ];
+    meta.activeSheetId = "tab_main";
+    modified = true;
+  }
+
+  if (!meta.activeSheetId && meta.sheets.length > 0) {
+    meta.activeSheetId = meta.sheets[0].id;
+    modified = true;
+  }
+
+  if (modified) {
+    fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), "utf-8");
+  }
+
+  return meta;
 }
 
 function createSpreadsheetInternal(
   metadata: SpreadsheetMetadata,
-  records: BacklinkRecord[] = [],
+  tabsRecords: Record<string, BacklinkRecord[]> = {},
   settings: SpreadsheetSettings = { autoExtractDomain: true }
 ) {
   const sheetDir = path.join(SPREADSHEETS_DIR, metadata.id);
+  const tabsDir = path.join(sheetDir, "tabs");
   ensureDir(sheetDir);
+  ensureDir(tabsDir);
+
   fs.writeFileSync(
     path.join(sheetDir, "metadata.json"),
     JSON.stringify(metadata, null, 2),
-    "utf-8"
-  );
-  fs.writeFileSync(
-    path.join(sheetDir, "backlinks.json"),
-    JSON.stringify(records, null, 2),
     "utf-8"
   );
   fs.writeFileSync(
@@ -292,10 +317,26 @@ function createSpreadsheetInternal(
     JSON.stringify(settings, null, 2),
     "utf-8"
   );
+
+  // Write tabs records and backwards-compatible backlinks.json
+  const defaultTabRecords = tabsRecords[metadata.activeSheetId || "tab_main"] || [];
+  fs.writeFileSync(
+    path.join(sheetDir, "backlinks.json"),
+    JSON.stringify(defaultTabRecords, null, 2),
+    "utf-8"
+  );
+
+  for (const [tabId, records] of Object.entries(tabsRecords)) {
+    fs.writeFileSync(
+      path.join(tabsDir, `${tabId}.json`),
+      JSON.stringify(records, null, 2),
+      "utf-8"
+    );
+  }
 }
 
 /**
- * List all spreadsheets with optional filtering
+ * List all spreadsheets
  */
 export async function listSpreadsheets(params?: {
   workspaceId?: string;
@@ -311,32 +352,18 @@ export async function listSpreadsheets(params?: {
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const metaFile = path.join(SPREADSHEETS_DIR, entry.name, "metadata.json");
-    if (!fs.existsSync(metaFile)) continue;
-
     try {
-      const raw = fs.readFileSync(metaFile, "utf-8");
-      const meta: SpreadsheetMetadata = JSON.parse(raw);
+      const meta = normalizeSpreadsheetMetadata(entry.name);
 
-      // Filter by workspace
       if (params?.workspaceId && params.workspaceId !== "all" && meta.workspaceId !== params.workspaceId) {
         continue;
       }
-
-      // Filter by archived
       if (params?.archived !== undefined) {
         if (Boolean(meta.isArchived) !== params.archived) continue;
       } else {
-        // Default to excluding archived unless explicitly requested
         if (meta.isArchived) continue;
       }
-
-      // Filter by starred
-      if (params?.starred && !meta.isStarred) {
-        continue;
-      }
-
-      // Filter by search
+      if (params?.starred && !meta.isStarred) continue;
       if (params?.search?.trim()) {
         const q = params.search.toLowerCase().trim();
         const matchesTitle = meta.title.toLowerCase().includes(q);
@@ -351,7 +378,6 @@ export async function listSpreadsheets(params?: {
     }
   }
 
-  // Sorting
   const sortBy = params?.sortBy || "updatedAt";
   results.sort((a, b) => {
     if (sortBy === "title") return a.title.localeCompare(b.title);
@@ -363,32 +389,38 @@ export async function listSpreadsheets(params?: {
 }
 
 /**
- * Get spreadsheet full data (metadata, records, settings)
+ * Get spreadsheet full data (metadata, records for active sheet tab, settings)
  */
 export async function getSpreadsheet(
   id: string,
-  customToken?: string
+  customToken?: string,
+  targetTabId?: string
 ): Promise<SpreadsheetFullData> {
   ensureInitialMigration();
+  const metadata = normalizeSpreadsheetMetadata(id);
 
   const sheetDir = path.join(SPREADSHEETS_DIR, id);
-  const metaFile = path.join(sheetDir, "metadata.json");
-  const recordsFile = path.join(sheetDir, "backlinks.json");
-  const settingsFile = path.join(sheetDir, "settings.json");
+  const tabsDir = path.join(sheetDir, "tabs");
+  ensureDir(tabsDir);
 
-  if (!fs.existsSync(metaFile)) {
-    throw new Error(`Spreadsheet "${id}" not found.`);
-  }
+  const activeTabId = targetTabId || metadata.activeSheetId || metadata.sheets[0]?.id || "tab_main";
+  const tabFile = path.join(tabsDir, `${activeTabId}.json`);
+  const legacyFile = path.join(sheetDir, "backlinks.json");
 
-  const metadata: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
   let records: BacklinkRecord[] = [];
-  if (fs.existsSync(recordsFile)) {
+  if (fs.existsSync(tabFile)) {
     try {
-      records = JSON.parse(fs.readFileSync(recordsFile, "utf-8"));
+      records = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+    } catch {}
+  } else if (fs.existsSync(legacyFile)) {
+    try {
+      records = JSON.parse(fs.readFileSync(legacyFile, "utf-8"));
+      fs.writeFileSync(tabFile, JSON.stringify(records, null, 2), "utf-8");
     } catch {}
   }
 
   let settings: SpreadsheetSettings = { autoExtractDomain: true };
+  const settingsFile = path.join(sheetDir, "settings.json");
   if (fs.existsSync(settingsFile)) {
     try {
       settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
@@ -399,14 +431,15 @@ export async function getSpreadsheet(
   const tokenToUse = customToken || getGitHubConfig().token;
   if (tokenToUse) {
     try {
-      const ghPath = `data/spreadsheets/${id}/backlinks.json`;
+      const ghPath = `data/spreadsheets/${id}/tabs/${activeTabId}.json`;
       const ghResult = await readBacklinksFromGitHub(ghPath, tokenToUse);
-      if (ghResult.data && ghResult.data.length > 0) {
+      if (ghResult.data && Array.isArray(ghResult.data)) {
         records = ghResult.data;
         return {
           metadata,
           records,
           settings,
+          activeSheetId: activeTabId,
           sha: ghResult.sha,
           source: "github",
         };
@@ -420,6 +453,7 @@ export async function getSpreadsheet(
     metadata,
     records,
     settings,
+    activeSheetId: activeTabId,
     sha: `local-${Date.now()}`,
     source: "local",
   };
@@ -437,11 +471,10 @@ export async function createSpreadsheet(
 
   const id = generateSpreadsheetId();
   const now = new Date().toISOString();
+  const defaultTabId = "tab_main";
 
   let initialRecords: BacklinkRecord[] = [];
-  if (input.template === "backlinks" || input.template === "blank") {
-    initialRecords = [];
-  } else if (input.template === "citations") {
+  if (input.template === "citations") {
     initialRecords = [
       {
         ...createEmptyBacklink("yelp.com"),
@@ -459,6 +492,13 @@ export async function createSpreadsheet(
     ];
   }
 
+  const defaultTab: SheetTab = {
+    id: defaultTabId,
+    name: "Sheet 1",
+    order: 0,
+    recordCount: initialRecords.length,
+  };
+
   const metadata: SpreadsheetMetadata = {
     id,
     title: input.title.trim(),
@@ -472,15 +512,16 @@ export async function createSpreadsheet(
     isStarred: false,
     isArchived: false,
     recordCount: initialRecords.length,
+    activeSheetId: defaultTabId,
+    sheets: [defaultTab],
   };
 
   const settings: SpreadsheetSettings = {
     autoExtractDomain: true,
   };
 
-  createSpreadsheetInternal(metadata, initialRecords, settings);
+  createSpreadsheetInternal(metadata, { [defaultTabId]: initialRecords }, settings);
 
-  // Commit to GitHub if token configured
   const tokenToUse = customToken || getGitHubConfig().token;
   let sha = `local-${Date.now()}`;
   let source: "github" | "local" = "local";
@@ -489,7 +530,7 @@ export async function createSpreadsheet(
     try {
       const commitMsg = `feat(spreadsheet): create spreadsheet "${metadata.title}" [${metadata.id}]`;
       const res = await writeBacklinksToGitHub(
-        `data/spreadsheets/${id}/backlinks.json`,
+        `data/spreadsheets/${id}/tabs/${defaultTabId}.json`,
         initialRecords,
         undefined,
         commitMsg,
@@ -506,85 +547,57 @@ export async function createSpreadsheet(
     metadata,
     records: initialRecords,
     settings,
+    activeSheetId: defaultTabId,
     sha,
     source,
   };
 }
 
 /**
- * Update spreadsheet metadata (title, star, archive, description, settings)
+ * Save records for a specific sheet tab inside a spreadsheet
  */
-export async function updateSpreadsheetMetadata(
-  id: string,
-  updates: Partial<SpreadsheetMetadata> & { settings?: Partial<SpreadsheetSettings> },
-  customToken?: string
-): Promise<SpreadsheetMetadata> {
-  const sheetDir = path.join(SPREADSHEETS_DIR, id);
-  const metaFile = path.join(sheetDir, "metadata.json");
-
-  if (!fs.existsSync(metaFile)) {
-    throw new Error(`Spreadsheet "${id}" not found.`);
-  }
-
-  const currentMeta: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
-  const updatedMeta: SpreadsheetMetadata = {
-    ...currentMeta,
-    ...updates,
-    updatedAt: new Date().toISOString(),
-  };
-
-  fs.writeFileSync(metaFile, JSON.stringify(updatedMeta, null, 2), "utf-8");
-
-  // If settings updated
-  if (updates.settings) {
-    const settingsFile = path.join(sheetDir, "settings.json");
-    let curSettings: SpreadsheetSettings = { autoExtractDomain: true };
-    if (fs.existsSync(settingsFile)) {
-      try {
-        curSettings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-      } catch {}
-    }
-    const mergedSettings = { ...curSettings, ...updates.settings };
-    fs.writeFileSync(settingsFile, JSON.stringify(mergedSettings, null, 2), "utf-8");
-  }
-
-  return updatedMeta;
-}
-
-/**
- * Save records for a spreadsheet (Autosave & manual commit)
- */
-export async function saveSpreadsheetRecords(
-  id: string,
+export async function saveSheetTabRecords(
+  spreadsheetId: string,
+  tabId: string,
   records: BacklinkRecord[],
   baseSha?: string,
   commitMessage?: string,
   customToken?: string
 ): Promise<{ success: boolean; sha: string; source: "github" | "local"; message: string }> {
-  const sheetDir = path.join(SPREADSHEETS_DIR, id);
-  const metaFile = path.join(sheetDir, "metadata.json");
-  const recordsFile = path.join(sheetDir, "backlinks.json");
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  ensureDir(tabsDir);
 
-  if (!fs.existsSync(metaFile)) {
-    throw new Error(`Spreadsheet "${id}" not found.`);
+  const tabIndex = metadata.sheets.findIndex((s) => s.id === tabId);
+  if (tabIndex === -1) {
+    throw new Error(`Sheet tab "${tabId}" not found in spreadsheet "${spreadsheetId}".`);
   }
 
-  // 1. Write records locally
-  fs.writeFileSync(recordsFile, JSON.stringify(records, null, 2), "utf-8");
+  // 1. Write tab records
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
+  fs.writeFileSync(tabFile, JSON.stringify(records, null, 2), "utf-8");
 
-  // 2. Update metadata record count and updatedAt
-  const meta: SpreadsheetMetadata = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
-  meta.recordCount = records.length;
-  meta.updatedAt = new Date().toISOString();
-  fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2), "utf-8");
+  // Also sync to backlinks.json if active sheet for backwards compatibility
+  if (metadata.activeSheetId === tabId) {
+    fs.writeFileSync(path.join(sheetDir, "backlinks.json"), JSON.stringify(records, null, 2), "utf-8");
+  }
+
+  // 2. Update metadata tab count & overall count
+  metadata.sheets[tabIndex].recordCount = records.length;
+  metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
+  metadata.updatedAt = new Date().toISOString();
+
+  const metaFile = path.join(sheetDir, "metadata.json");
+  fs.writeFileSync(metaFile, JSON.stringify(metadata, null, 2), "utf-8");
 
   // 3. GitHub Commit
   const tokenToUse = customToken || getGitHubConfig().token;
   if (tokenToUse) {
-    const ghPath = `data/spreadsheets/${id}/backlinks.json`;
+    const ghPath = `data/spreadsheets/${spreadsheetId}/tabs/${tabId}.json`;
     const defaultMsg =
       commitMessage ||
-      `chore(spreadsheet): update "${meta.title}" [${records.length} records]`;
+      `chore(sheet): update "${metadata.title}" [${metadata.sheets[tabIndex].name} - ${records.length} records]`;
 
     const writeRes = await writeBacklinksToGitHub(
       ghPath,
@@ -606,8 +619,282 @@ export async function saveSpreadsheetRecords(
     success: true,
     sha: `local-${Date.now()}`,
     source: "local",
-    message: "Saved to local repository cache (GitHub token not configured).",
+    message: "Saved sheet tab records to local repository cache.",
   };
+}
+
+/**
+ * Add a new sheet tab to a spreadsheet
+ */
+export async function addSheetTab(
+  spreadsheetId: string,
+  tabName?: string,
+  initialRecords: BacklinkRecord[] = [],
+  customToken?: string
+): Promise<{ metadata: SpreadsheetMetadata; newTab: SheetTab }> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  ensureDir(tabsDir);
+
+  const newTabId = generateSheetTabId();
+  const nextOrder = metadata.sheets.length;
+  const name = tabName?.trim() || `Sheet ${metadata.sheets.length + 1}`;
+
+  const newTab: SheetTab = {
+    id: newTabId,
+    name,
+    order: nextOrder,
+    recordCount: initialRecords.length,
+  };
+
+  // Write tab records
+  fs.writeFileSync(
+    path.join(tabsDir, `${newTabId}.json`),
+    JSON.stringify(initialRecords, null, 2),
+    "utf-8"
+  );
+
+  // Update metadata
+  metadata.sheets.push(newTab);
+  metadata.activeSheetId = newTabId;
+  metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
+  metadata.updatedAt = new Date().toISOString();
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
+  // GitHub commit
+  const tokenToUse = customToken || getGitHubConfig().token;
+  if (tokenToUse) {
+    try {
+      await writeBacklinksToGitHub(
+        `data/spreadsheets/${spreadsheetId}/tabs/${newTabId}.json`,
+        initialRecords,
+        undefined,
+        `feat(sheet-tab): add sheet "${name}" in "${metadata.title}"`,
+        tokenToUse
+      );
+    } catch (e) {
+      console.warn("GitHub commit for new sheet tab failed:", e);
+    }
+  }
+
+  return { metadata, newTab };
+}
+
+/**
+ * Rename a sheet tab
+ */
+export async function renameSheetTab(
+  spreadsheetId: string,
+  tabId: string,
+  newName: string,
+  customToken?: string
+): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const target = metadata.sheets.find((s) => s.id === tabId);
+  if (!target) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
+  }
+
+  target.name = newName.trim();
+  metadata.updatedAt = new Date().toISOString();
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
+  return metadata;
+}
+
+/**
+ * Duplicate a sheet tab (clones tab and its records)
+ */
+export async function duplicateSheetTab(
+  spreadsheetId: string,
+  tabId: string,
+  customToken?: string
+): Promise<{ metadata: SpreadsheetMetadata; clonedTab: SheetTab }> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const target = metadata.sheets.find((s) => s.id === tabId);
+  if (!target) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
+  }
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
+
+  let records: BacklinkRecord[] = [];
+  if (fs.existsSync(tabFile)) {
+    try {
+      records = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+    } catch {}
+  }
+
+  return addSheetTab(
+    spreadsheetId,
+    `${target.name} (Copy)`,
+    records,
+    customToken
+  );
+}
+
+/**
+ * Delete a sheet tab with protection against deleting the last remaining sheet
+ */
+export async function deleteSheetTab(
+  spreadsheetId: string,
+  tabId: string,
+  customToken?: string
+): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+
+  if (metadata.sheets.length <= 1) {
+    throw new Error("Cannot delete the only sheet tab in the spreadsheet. Create a replacement sheet first.");
+  }
+
+  const index = metadata.sheets.findIndex((s) => s.id === tabId);
+  if (index === -1) {
+    throw new Error(`Sheet tab "${tabId}" not found.`);
+  }
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+  const tabFile = path.join(tabsDir, `${tabId}.json`);
+
+  // Remove file
+  if (fs.existsSync(tabFile)) {
+    fs.rmSync(tabFile, { force: true });
+  }
+
+  // Remove from metadata
+  metadata.sheets.splice(index, 1);
+
+  // If deleted active tab, activate nearest tab
+  if (metadata.activeSheetId === tabId) {
+    metadata.activeSheetId = metadata.sheets[Math.max(0, index - 1)].id;
+  }
+
+  // Normalize order
+  metadata.sheets.forEach((s, i) => {
+    s.order = i;
+  });
+
+  metadata.recordCount = metadata.sheets.reduce((sum, s) => sum + s.recordCount, 0);
+  metadata.updatedAt = new Date().toISOString();
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
+  return metadata;
+}
+
+/**
+ * Reorder sheet tabs using new order array of tab IDs
+ */
+export async function reorderSheetTabs(
+  spreadsheetId: string,
+  tabIdsInNewOrder: string[],
+  customToken?: string
+): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+
+  const reordered: SheetTab[] = [];
+  tabIdsInNewOrder.forEach((tid, idx) => {
+    const found = metadata.sheets.find((s) => s.id === tid);
+    if (found) {
+      reordered.push({ ...found, order: idx });
+    }
+  });
+
+  // Add any missing
+  metadata.sheets.forEach((s) => {
+    if (!reordered.some((r) => r.id === s.id)) {
+      reordered.push({ ...s, order: reordered.length });
+    }
+  });
+
+  metadata.sheets = reordered;
+  metadata.updatedAt = new Date().toISOString();
+
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+
+  return metadata;
+}
+
+/**
+ * Set active sheet tab
+ */
+export async function setActiveSheetTab(spreadsheetId: string, tabId: string): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  if (metadata.sheets.some((s) => s.id === tabId)) {
+    metadata.activeSheetId = tabId;
+    const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+    fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(metadata, null, 2), "utf-8");
+  }
+  return metadata;
+}
+
+/**
+ * Export entire spreadsheet (all sheets + metadata + records)
+ */
+export async function exportEntireSpreadsheet(spreadsheetId: string) {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const sheetDir = path.join(SPREADSHEETS_DIR, spreadsheetId);
+  const tabsDir = path.join(sheetDir, "tabs");
+
+  const sheetsData: Record<string, { tab: SheetTab; records: BacklinkRecord[] }> = {};
+
+  for (const tab of metadata.sheets) {
+    const tabFile = path.join(tabsDir, `${tab.id}.json`);
+    let recs: BacklinkRecord[] = [];
+    if (fs.existsSync(tabFile)) {
+      try {
+        recs = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+      } catch {}
+    }
+    sheetsData[tab.id] = { tab, records: recs };
+  }
+
+  return {
+    metadata,
+    sheets: sheetsData,
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Update spreadsheet metadata
+ */
+export async function updateSpreadsheetMetadata(
+  id: string,
+  updates: Partial<SpreadsheetMetadata> & { settings?: Partial<SpreadsheetSettings> },
+  customToken?: string
+): Promise<SpreadsheetMetadata> {
+  const metadata = normalizeSpreadsheetMetadata(id);
+  const sheetDir = path.join(SPREADSHEETS_DIR, id);
+
+  const updatedMeta: SpreadsheetMetadata = {
+    ...metadata,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(path.join(sheetDir, "metadata.json"), JSON.stringify(updatedMeta, null, 2), "utf-8");
+
+  if (updates.settings) {
+    const settingsFile = path.join(sheetDir, "settings.json");
+    let curSettings: SpreadsheetSettings = { autoExtractDomain: true };
+    if (fs.existsSync(settingsFile)) {
+      try {
+        curSettings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+      } catch {}
+    }
+    const mergedSettings = { ...curSettings, ...updates.settings };
+    fs.writeFileSync(settingsFile, JSON.stringify(mergedSettings, null, 2), "utf-8");
+  }
+
+  return updatedMeta;
 }
 
 /**
@@ -635,12 +922,28 @@ export async function duplicateSpreadsheet(
     isArchived: false,
   };
 
-  createSpreadsheetInternal(metadata, original.records, original.settings);
+  const tabsRecords: Record<string, BacklinkRecord[]> = {};
+  const sheetDir = path.join(SPREADSHEETS_DIR, id);
+  const tabsDir = path.join(sheetDir, "tabs");
+
+  for (const tab of original.metadata.sheets) {
+    const tabFile = path.join(tabsDir, `${tab.id}.json`);
+    let recs: BacklinkRecord[] = [];
+    if (fs.existsSync(tabFile)) {
+      try {
+        recs = JSON.parse(fs.readFileSync(tabFile, "utf-8"));
+      } catch {}
+    }
+    tabsRecords[tab.id] = recs;
+  }
+
+  createSpreadsheetInternal(metadata, tabsRecords, original.settings);
 
   return {
     metadata,
-    records: original.records,
+    records: tabsRecords[metadata.activeSheetId || "tab_main"] || [],
     settings: original.settings,
+    activeSheetId: metadata.activeSheetId || "tab_main",
     sha: `local-${Date.now()}`,
     source: "local",
   };

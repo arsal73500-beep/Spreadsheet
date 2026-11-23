@@ -50,6 +50,20 @@ export const WORKSPACES: Record<string, WorkspaceConfig> = {
   },
 };
 
+export interface SheetTab {
+  id: string; // Permanent unique ID e.g. "tab_main" or "tab_1732..."
+  name: string; // e.g. "Sheet 1", "Guest Posts", "Directories"
+  order: number;
+  recordCount: number;
+  color?: string;
+  settings?: {
+    defaultSortColumn?: string;
+    defaultSortDirection?: "asc" | "desc";
+    visibleColumns?: Record<string, boolean>;
+    columnWidths?: Record<string, number>;
+  };
+}
+
 export interface SpreadsheetMetadata {
   id: string;
   title: string;
@@ -63,6 +77,8 @@ export interface SpreadsheetMetadata {
   isStarred: boolean;
   isArchived: boolean;
   recordCount: number;
+  activeSheetId?: string; // Remembers the currently active sheet tab
+  sheets: SheetTab[]; // Array of sheet tabs
 }
 
 export interface SpreadsheetSettings {
@@ -74,8 +90,9 @@ export interface SpreadsheetSettings {
 
 export interface SpreadsheetFullData {
   metadata: SpreadsheetMetadata;
-  records: BacklinkRecord[];
+  records: BacklinkRecord[]; // Records of the active sheet
   settings: SpreadsheetSettings;
+  activeSheetId: string;
   sha?: string;
   source: "github" | "local";
 }
@@ -91,4 +108,8 @@ export type CreateSpreadsheetInput = z.infer<typeof CreateSpreadsheetSchema>;
 
 export function generateSpreadsheetId(prefix = "sheet"): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+}
+
+export function generateSheetTabId(prefix = "tab"): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 }
