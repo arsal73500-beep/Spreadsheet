@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import {
   Table2,
   ArrowLeft,
@@ -49,7 +50,8 @@ export default function SpreadsheetEditorPage() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const [activeView, setActiveView] = useState<"spreadsheet" | "analytics" | "api">("spreadsheet");
-  const [currentRole, setCurrentRole] = useState<UserRole>("admin");
+  const { data: session } = useSession();
+  const currentRole: UserRole = (session?.user?.role as UserRole) || "viewer";
 
   // Sync state
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "unsaved" | "conflict" | "error">("saved");
@@ -808,18 +810,19 @@ export default function SpreadsheetEditorPage() {
 
         {/* Right Controls */}
         <div className="flex items-center gap-2 text-xs">
-          {/* Role Selector Badge */}
-          <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-md px-2 py-1">
-            <Shield className="w-3.5 h-3.5 text-gray-500" />
-            <select
-              value={currentRole}
-              onChange={(e) => setCurrentRole(e.target.value as UserRole)}
-              className="bg-transparent text-gray-800 font-semibold text-xs focus:outline-none cursor-pointer capitalize"
-            >
-              <option value="admin">Admin</option>
-              <option value="editor">Editor</option>
-              <option value="viewer">Viewer</option>
-            </select>
+          {/* Verified Role Badge */}
+          <div
+            title={`Your role: ${currentRole.toUpperCase()}`}
+            className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold border ${
+              currentRole === "admin"
+                ? "bg-purple-50 text-purple-800 border-purple-200"
+                : currentRole === "editor"
+                ? "bg-blue-50 text-blue-800 border-blue-200"
+                : "bg-gray-100 text-gray-700 border-gray-200"
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            <span className="capitalize">{currentRole}</span>
           </div>
 
           {/* GitHub Indicator */}
@@ -1031,7 +1034,6 @@ export default function SpreadsheetEditorPage() {
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
         currentRole={currentRole}
-        onRoleChange={setCurrentRole}
         currentProject={{
           id: metadata.workspaceId,
           name: metadata.title,

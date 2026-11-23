@@ -6,7 +6,9 @@ import { hasPermission } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
-    const { customToken } = getApiAuthContext(req);
+    const auth = await getApiAuthContext(req, "canView");
+    if (auth.errorResponse) return auth.errorResponse;
+
     const { searchParams } = new URL(req.url);
     const workspaceId = searchParams.get("workspaceId") || undefined;
     const starred = searchParams.get("starred") === "true" ? true : undefined;
@@ -23,7 +25,7 @@ export async function GET(req: NextRequest) {
         search,
         sortBy,
       },
-      customToken
+      auth.customToken
     );
 
     return NextResponse.json({
@@ -40,14 +42,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { role, customToken } = getApiAuthContext(req);
-
-  if (!hasPermission(role, "canAdd")) {
-    return NextResponse.json(
-      { error: "Forbidden: Viewer role cannot create spreadsheets." },
-      { status: 403 }
-    );
-  }
+  const auth = await getApiAuthContext(req, "canAdd");
+  if (auth.errorResponse) return auth.errorResponse;
 
   try {
     const body = await req.json();
@@ -60,13 +56,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const ownerName = req.headers.get("x-user-name") || "Arsal Malik";
-    const ownerEmail = req.headers.get("x-user-email") || "arsal73500@gmail.com";
+    const ownerName = auth.user?.name || "User";
+    const ownerEmail = auth.user?.email || "";
 
     const result = await createSpreadsheet(
       validated.data,
       { name: ownerName, email: ownerEmail },
-      customToken
+      auth.customToken
     );
 
     return NextResponse.json(

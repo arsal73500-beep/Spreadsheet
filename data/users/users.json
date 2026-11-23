@@ -1,0 +1,20 @@
+[
+  {
+    "id": "usr_admin_arsal",
+    "email": "arsal73500@gmail.com",
+    "name": "Arsal Malik",
+    "role": "admin",
+    "createdAt": "2026-10-15T09:00:00.000Z",
+    "lastLoginAt": "2026-11-23T23:06:58.097Z"
+  },
+  {
+    "id": "usr_1795475218095_crza",
+    "email": "dr.sarah@gmail.com",
+    "name": "Dr. Sarah",
+    "role": "editor",
+    "createdAt": "2026-11-23T23:06:58.094Z",
+    "lastLoginAt": "2026-11-23T23:06:58.094Z",
+    "assignedBy": "arsal73500@gmail.com",
+    "assignedAt": "2026-11-23T23:06:58.099Z"
+  }
+]

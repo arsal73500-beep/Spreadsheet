@@ -5,8 +5,10 @@ import { getApiAuthContext } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
   try {
-    const { customToken } = getApiAuthContext(req);
-    const allSheets = await listSpreadsheets({ archived: false }, customToken);
+    const auth = await getApiAuthContext(req, "canView");
+    if (auth.errorResponse) return auth.errorResponse;
+
+    const allSheets = await listSpreadsheets({ archived: false }, auth.customToken);
 
     const workspacesWithStats = Object.values(WORKSPACES).map((ws) => {
       const sheets = allSheets.filter((s) => s.workspaceId === ws.id);
