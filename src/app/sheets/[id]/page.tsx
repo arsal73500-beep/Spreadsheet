@@ -20,7 +20,7 @@ import {
   BarChart3,
   Code2,
 } from "lucide-react";
-import { SpreadsheetMetadata, SpreadsheetSettings, WORKSPACES } from "@/lib/spreadsheet-schema";
+import { SpreadsheetMetadata, SpreadsheetSettings, SheetTab, WORKSPACES } from "@/lib/spreadsheet-schema";
 import { BacklinkRecord, createEmptyBacklink, BacklinkStatus } from "@/lib/schema";
 import { UserRole, hasPermission } from "@/lib/auth";
 import { exportBacklinksToCsv } from "@/lib/csv-parser";
@@ -28,6 +28,7 @@ import { exportBacklinksToCsv } from "@/lib/csv-parser";
 import { SpreadsheetToolbar } from "@/components/spreadsheet/SpreadsheetToolbar";
 import { FormulaBar } from "@/components/spreadsheet/FormulaBar";
 import { SpreadsheetGrid, COLUMNS } from "@/components/spreadsheet/SpreadsheetGrid";
+import { SheetTabsBar } from "@/components/spreadsheet/SheetTabsBar";
 import { CsvImportModal } from "@/components/dialogs/CsvImportModal";
 import { SettingsModal } from "@/components/dialogs/SettingsModal";
 import { FilterModal, FilterState } from "@/components/dialogs/FilterModal";
@@ -40,6 +41,7 @@ export default function SpreadsheetEditorPage() {
   const spreadsheetId = params.id as string;
 
   const [metadata, setMetadata] = useState<SpreadsheetMetadata | null>(null);
+  const [activeSheetId, setActiveSheetId] = useState<string>("tab_main");
   const [settings, setSettings] = useState<SpreadsheetSettings>({ autoExtractDomain: true });
   const [records, setRecords] = useState<BacklinkRecord[]>([]);
   const [baseSha, setBaseSha] = useState<string>("");
@@ -61,7 +63,7 @@ export default function SpreadsheetEditorPage() {
   const [activeCellValue, setActiveCellValue] = useState<string>("");
   const [activeColumnName, setActiveColumnName] = useState<string>("");
 
-  // Undo / Redo Stacks
+  // Undo / Redo Stacks (per active sheet tab)
   const [undoStack, setUndoStack] = useState<BacklinkRecord[][]>([]);
   const [redoStack, setRedoStack] = useState<BacklinkRecord[][]>([]);
 
@@ -108,43 +110,64 @@ export default function SpreadsheetEditorPage() {
   }, []);
 
   // Fetch spreadsheet data
-  const loadSpreadsheet = useCallback(async () => {
-    setLoading(true);
-    setErrorMsg("");
-    try {
-      const headers: Record<string, string> = {
-        "x-user-role": currentRole,
-      };
-      if (customToken) headers["x-github-token"] = customToken;
+  const loadSpreadsheet = useCallback(
+    async (targetTabId?: string) => {
+      setLoading(true);
+      setErrorMsg("");
+      try {
+        const headers: Record<string, string> = {
+          "x-user-role": currentRole,
+        };
+        if (customToken) headers["x-github-token"] = customToken;
 
-      const res = await fetch(`/api/spreadsheets/${spreadsheetId}`, { headers });
-      const json = await res.json();
+        const url = targetTabId
+          ? `/api/spreadsheets/${spreadsheetId}/sheets/${targetTabId}`
+          : `/api/spreadsheets/${spreadsheetId}`;
 
-      if (!res.ok) {
-        throw new Error(json.error || "Failed to load spreadsheet");
+        const res = await fetch(url, { headers });
+        const json = await res.json();
+
+        if (!res.ok) {
+          throw new Error(json.error || "Failed to load spreadsheet");
+        }
+
+        if (targetTabId) {
+          // Loaded specific sheet tab records
+          setRecords(json.records || []);
+          setActiveSheetId(targetTabId);
+          setBaseSha(json.sha || "");
+          if (json.metadata) setMetadata(json.metadata);
+        } else {
+          // Loaded full spreadsheet
+          setMetadata(json.data.metadata);
+          setEditedTitle(json.data.metadata.title);
+          setActiveSheetId(json.data.activeSheetId || "tab_main");
+          setRecords(json.data.records || []);
+          setSettings(json.data.settings || { autoExtractDomain: true });
+          setBaseSha(json.data.sha || "");
+          setIsGitHubConnected(json.data.source === "github" || Boolean(customToken));
+          setLastSavedAt(json.data.metadata.updatedAt);
+        }
+
+        setSaveStatus("saved");
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedRowIds(new Set());
+      } catch (err: any) {
+        setErrorMsg(err.message || "Failed to load spreadsheet");
+        setSaveStatus("error");
+      } finally {
+        setLoading(false);
       }
-
-      setMetadata(json.data.metadata);
-      setEditedTitle(json.data.metadata.title);
-      setRecords(json.data.records || []);
-      setSettings(json.data.settings || { autoExtractDomain: true });
-      setBaseSha(json.data.sha || "");
-      setIsGitHubConnected(json.data.source === "github" || Boolean(customToken));
-      setSaveStatus("saved");
-      setLastSavedAt(json.data.metadata.updatedAt);
-    } catch (err: any) {
-      setErrorMsg(err.message || "Failed to load spreadsheet");
-      setSaveStatus("error");
-    } finally {
-      setLoading(false);
-    }
-  }, [spreadsheetId, currentRole, customToken]);
+    },
+    [spreadsheetId, currentRole, customToken]
+  );
 
   useEffect(() => {
     loadSpreadsheet();
   }, [loadSpreadsheet]);
 
-  // Persist records
+  // Persist records for currently active sheet tab
   const persistChanges = useCallback(
     async (recordsToSave: BacklinkRecord[], commitMsg?: string) => {
       setSaveStatus("saving");
@@ -155,18 +178,21 @@ export default function SpreadsheetEditorPage() {
         };
         if (customToken) headers["x-github-token"] = customToken;
 
-        const res = await fetch(`/api/spreadsheets/${spreadsheetId}/records`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            records: recordsToSave,
-            baseSha,
-            commitMessage:
-              commitMsg ||
-              `chore(spreadsheet): update "${metadata?.title}" [${recordsToSave.length} records]`,
-            mode: "replace",
-          }),
-        });
+        const res = await fetch(
+          `/api/spreadsheets/${spreadsheetId}/sheets/${activeSheetId}/records`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              records: recordsToSave,
+              baseSha,
+              commitMessage:
+                commitMsg ||
+                `chore(sheet): update "${metadata?.title}" [${recordsToSave.length} records]`,
+              mode: "replace",
+            }),
+          }
+        );
 
         const result = await res.json();
 
@@ -185,10 +211,16 @@ export default function SpreadsheetEditorPage() {
         setBaseSha(result.sha);
         setSaveStatus("saved");
         setLastSavedAt(new Date().toISOString());
+
+        // Update local metadata record count
         if (metadata) {
+          const updatedSheets = metadata.sheets.map((s) =>
+            s.id === activeSheetId ? { ...s, recordCount: recordsToSave.length } : s
+          );
           setMetadata({
             ...metadata,
-            recordCount: recordsToSave.length,
+            sheets: updatedSheets,
+            recordCount: updatedSheets.reduce((sum, s) => sum + s.recordCount, 0),
             updatedAt: new Date().toISOString(),
           });
         }
@@ -197,7 +229,7 @@ export default function SpreadsheetEditorPage() {
         setSaveStatus("error");
       }
     },
-    [spreadsheetId, baseSha, currentRole, customToken, metadata]
+    [spreadsheetId, activeSheetId, baseSha, currentRole, customToken, metadata]
   );
 
   // Debounced auto-save
@@ -213,6 +245,191 @@ export default function SpreadsheetEditorPage() {
     },
     [persistChanges]
   );
+
+  // Switch sheet tab
+  const handleSelectSheetTab = async (tabId: string) => {
+    if (tabId === activeSheetId) return;
+
+    // Persist any unsaved changes in current tab before switching
+    if (saveStatus === "unsaved") {
+      await persistChanges(records);
+    }
+
+    // Update active sheet in metadata
+    fetch(`/api/spreadsheets/${spreadsheetId}/sheets/${tabId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "x-user-role": currentRole },
+      body: JSON.stringify({ active: true }),
+    }).catch(() => {});
+
+    loadSpreadsheet(tabId);
+  };
+
+  // Add new sheet tab
+  const handleAddSheetTab = async () => {
+    if (!hasPermission(currentRole, "canAdd")) return;
+    try {
+      const res = await fetch(`/api/spreadsheets/${spreadsheetId}/sheets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentRole,
+          ...(customToken ? { "x-github-token": customToken } : {}),
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setMetadata(data.metadata);
+      setActiveSheetId(data.tab.id);
+      setRecords([]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedRowIds(new Set());
+    } catch (err: any) {
+      alert(err.message || "Failed to add new sheet tab.");
+    }
+  };
+
+  // Rename sheet tab
+  const handleRenameSheetTab = async (tabId: string, newName: string) => {
+    if (!hasPermission(currentRole, "canEdit")) return;
+    try {
+      const res = await fetch(`/api/spreadsheets/${spreadsheetId}/sheets/${tabId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentRole,
+          ...(customToken ? { "x-github-token": customToken } : {}),
+        },
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMetadata(data.metadata);
+    } catch (err: any) {
+      alert(err.message || "Failed to rename sheet tab.");
+    }
+  };
+
+  // Duplicate sheet tab
+  const handleDuplicateSheetTab = async (tabId: string) => {
+    if (!hasPermission(currentRole, "canAdd")) return;
+    try {
+      const res = await fetch(`/api/spreadsheets/${spreadsheetId}/sheets/${tabId}/duplicate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentRole,
+          ...(customToken ? { "x-github-token": customToken } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setMetadata(data.metadata);
+      handleSelectSheetTab(data.tab.id);
+    } catch (err: any) {
+      alert(err.message || "Failed to duplicate sheet tab.");
+    }
+  };
+
+  // Delete sheet tab
+  const handleDeleteSheetTab = async (tabId: string) => {
+    if (!hasPermission(currentRole, "canDelete")) {
+      alert("Only Administrators can delete sheet tabs.");
+      return;
+    }
+
+    if (metadata && metadata.sheets.length <= 1) {
+      alert("Cannot delete the only sheet tab in this spreadsheet. Please add a new sheet before deleting this one.");
+      return;
+    }
+
+    const tabToDelete = metadata?.sheets.find((s) => s.id === tabId);
+    if (!confirm(`Are you sure you want to delete sheet "${tabToDelete?.name || tabId}"? This will permanently delete its rows.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/spreadsheets/${spreadsheetId}/sheets/${tabId}`, {
+        method: "DELETE",
+        headers: {
+          "x-user-role": currentRole,
+          ...(customToken ? { "x-github-token": customToken } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setMetadata(data.metadata);
+      loadSpreadsheet(data.metadata.activeSheetId);
+    } catch (err: any) {
+      alert(err.message || "Failed to delete sheet tab.");
+    }
+  };
+
+  // Reorder sheet tabs
+  const handleReorderSheets = async (reorderedIds: string[]) => {
+    if (!metadata) return;
+    const reorderedList = [...metadata.sheets].sort(
+      (a, b) => reorderedIds.indexOf(a.id) - reorderedIds.indexOf(b.id)
+    );
+    setMetadata({ ...metadata, sheets: reorderedList });
+
+    try {
+      await fetch(`/api/spreadsheets/${spreadsheetId}/sheets`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-user-role": currentRole },
+        body: JSON.stringify({ tabIds: reorderedIds }),
+      });
+    } catch (e) {
+      console.warn("Reorder sync failed", e);
+    }
+  };
+
+  // Export current sheet as CSV
+  const handleExportCurrentSheetCsv = (sheetId?: string) => {
+    const targetId = sheetId || activeSheetId;
+    const sheetTab = metadata?.sheets.find((s) => s.id === targetId);
+    const sheetName = sheetTab?.name || "Sheet";
+    const filename = `${metadata?.title || "Spreadsheet"}_${sheetName}_${new Date().toISOString().split("T")[0]}.csv`;
+
+    const csvString = exportBacklinksToCsv(filteredAndSortedRecords, `${metadata?.title} - ${sheetName}`);
+    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename.toLowerCase().replace(/[^a-z0-9_.-]/g, "_"));
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Export entire spreadsheet (all sheets bundle)
+  const handleExportEntireSpreadsheet = async () => {
+    try {
+      const res = await fetch(`/api/spreadsheets/${spreadsheetId}/export`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      const jsonStr = JSON.stringify(data.data, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute(
+        "download",
+        `${metadata?.title.toLowerCase().replace(/[^a-z0-9]/g, "_")}_full_export_${new Date().toISOString().split("T")[0]}.json`
+      );
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      alert(err.message || "Failed to export spreadsheet.");
+    }
+  };
 
   // Update cell
   const handleUpdateCell = useCallback(
@@ -359,39 +576,25 @@ export default function SpreadsheetEditorPage() {
     };
     if (customToken) headers["x-github-token"] = customToken;
 
-    const res = await fetch(`/api/spreadsheets/${spreadsheetId}/records`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        records: importedRecords,
-        mode: "append",
-        commitMessage: `feat(import): imported ${importedRecords.length} records into "${metadata?.title}"`,
-      }),
-    });
+    const res = await fetch(
+      `/api/spreadsheets/${spreadsheetId}/sheets/${activeSheetId}/records`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          records: importedRecords,
+          mode: "append",
+          commitMessage: `feat(import): imported ${importedRecords.length} records into "${metadata?.title}"`,
+        }),
+      }
+    );
 
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error || "Failed to commit imported records");
     }
 
-    loadSpreadsheet();
-  };
-
-  // CSV Export handler
-  const handleExportCsv = () => {
-    if (!metadata) return;
-    const csvString = exportBacklinksToCsv(filteredAndSortedRecords, metadata.title);
-    const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute(
-      "download",
-      `${metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "-")}-${new Date().toISOString().split("T")[0]}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    loadSpreadsheet(activeSheetId);
   };
 
   // Filter & Sort
@@ -456,7 +659,7 @@ export default function SpreadsheetEditorPage() {
 
   const currentWorkspace = metadata ? WORKSPACES[metadata.workspaceId] || WORKSPACES.general : WORKSPACES.general;
 
-  if (loading) {
+  if (loading && !metadata) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#f8f9fa] space-y-3 select-none">
         <div className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-md animate-pulse">
@@ -485,6 +688,8 @@ export default function SpreadsheetEditorPage() {
     );
   }
 
+  const activeSheetTab = metadata.sheets.find((s) => s.id === activeSheetId);
+
   return (
     <div className="h-full w-full flex flex-col bg-[#f8f9fa] overflow-hidden select-none">
       {/* 1. Google Sheets Editor Header */}
@@ -499,7 +704,7 @@ export default function SpreadsheetEditorPage() {
             <Table2 className="w-5 h-5" />
           </button>
 
-          {/* Spreadsheet Title & Star */}
+          {/* Spreadsheet Title, Active Sheet Tag & Star */}
           <div>
             <div className="flex items-center gap-2">
               {isRenamingTitle ? (
@@ -524,7 +729,7 @@ export default function SpreadsheetEditorPage() {
                     if (hasPermission(currentRole, "canEdit")) setIsRenamingTitle(true);
                   }}
                   title={hasPermission(currentRole, "canEdit") ? "Click to rename spreadsheet" : undefined}
-                  className="font-bold text-gray-900 text-sm tracking-tight hover:bg-gray-100 px-1 py-0.5 rounded cursor-pointer transition truncate max-w-[320px]"
+                  className="font-bold text-gray-900 text-sm tracking-tight hover:bg-gray-100 px-1 py-0.5 rounded cursor-pointer transition truncate max-w-[280px]"
                 >
                   {metadata.title}
                 </span>
@@ -547,6 +752,13 @@ export default function SpreadsheetEditorPage() {
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${currentWorkspace.badgeClass}`}>
                 {currentWorkspace.name}
               </span>
+
+              {/* Current Active Tab Pill */}
+              {activeSheetTab && (
+                <span className="text-[10px] bg-gray-100 text-gray-700 px-2 py-0.5 rounded-md border border-gray-200 font-mono hidden sm:inline">
+                  {activeSheetTab.name}
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
@@ -643,7 +855,7 @@ export default function SpreadsheetEditorPage() {
 
       {/* 2. Main Content */}
       {activeView === "spreadsheet" && (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden relative">
           {/* Toolbar */}
           <SpreadsheetToolbar
             currentRole={currentRole}
@@ -655,8 +867,8 @@ export default function SpreadsheetEditorPage() {
             onUndo={handleUndo}
             onRedo={handleRedo}
             onOpenImport={() => setIsImportModalOpen(true)}
-            onExportCsv={handleExportCsv}
-            onRefresh={loadSpreadsheet}
+            onExportCsv={() => handleExportCurrentSheetCsv()}
+            onRefresh={() => loadSpreadsheet(activeSheetId)}
             saveStatus={saveStatus}
             lastSavedAt={lastSavedAt}
             onManualSave={() => persistChanges(records)}
@@ -682,7 +894,7 @@ export default function SpreadsheetEditorPage() {
             readOnly={!hasPermission(currentRole, "canEdit")}
           />
 
-          {/* Grid */}
+          {/* Spreadsheet Grid */}
           <SpreadsheetGrid
             records={filteredAndSortedRecords}
             currentRole={currentRole}
@@ -721,41 +933,88 @@ export default function SpreadsheetEditorPage() {
             }}
             onBulkStatusChange={handleBulkStatusChange}
           />
+
+          {/* 3. Bottom Google Sheets Sheet Tabs Navigation Bar */}
+          <SheetTabsBar
+            sheets={metadata.sheets}
+            activeSheetId={activeSheetId}
+            onSelectSheet={handleSelectSheetTab}
+            onAddSheet={handleAddSheetTab}
+            onRenameSheet={handleRenameSheetTab}
+            onDuplicateSheet={handleDuplicateSheetTab}
+            onDeleteSheet={handleDeleteSheetTab}
+            onReorderSheets={handleReorderSheets}
+            onExportSheetCsv={handleExportCurrentSheetCsv}
+            onExportEntireSpreadsheet={handleExportEntireSpreadsheet}
+            currentRole={currentRole}
+          />
         </div>
       )}
 
       {activeView === "analytics" && (
-        <MetricsDashboard
-          records={records}
-          currentProject={{
-            id: metadata.workspaceId,
-            name: metadata.title,
-            slug: metadata.workspaceId,
-            website: currentWorkspace.website,
-            description: metadata.description || currentWorkspace.description,
-            filePath: `data/spreadsheets/${metadata.id}/backlinks.json`,
-            color: currentWorkspace.color,
-            badgeClass: currentWorkspace.badgeClass,
-            targetAudience: currentWorkspace.description,
-          }}
-        />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <MetricsDashboard
+            records={records}
+            currentProject={{
+              id: metadata.workspaceId,
+              name: `${metadata.title} [${activeSheetTab?.name || "Sheet 1"}]`,
+              slug: metadata.workspaceId,
+              website: currentWorkspace.website,
+              description: metadata.description || currentWorkspace.description,
+              filePath: `data/spreadsheets/${metadata.id}/tabs/${activeSheetId}.json`,
+              color: currentWorkspace.color,
+              badgeClass: currentWorkspace.badgeClass,
+              targetAudience: currentWorkspace.description,
+            }}
+          />
+          {/* Bottom Tabs Bar */}
+          <SheetTabsBar
+            sheets={metadata.sheets}
+            activeSheetId={activeSheetId}
+            onSelectSheet={handleSelectSheetTab}
+            onAddSheet={handleAddSheetTab}
+            onRenameSheet={handleRenameSheetTab}
+            onDuplicateSheet={handleDuplicateSheetTab}
+            onDeleteSheet={handleDeleteSheetTab}
+            onReorderSheets={handleReorderSheets}
+            onExportSheetCsv={handleExportCurrentSheetCsv}
+            onExportEntireSpreadsheet={handleExportEntireSpreadsheet}
+            currentRole={currentRole}
+          />
+        </div>
       )}
 
       {activeView === "api" && (
-        <ApiDocumentationView
-          currentProject={{
-            id: metadata.workspaceId,
-            name: metadata.title,
-            slug: metadata.workspaceId,
-            website: currentWorkspace.website,
-            description: metadata.description || currentWorkspace.description,
-            filePath: `data/spreadsheets/${metadata.id}/backlinks.json`,
-            color: currentWorkspace.color,
-            badgeClass: currentWorkspace.badgeClass,
-            targetAudience: currentWorkspace.description,
-          }}
-          customToken={customToken}
-        />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <ApiDocumentationView
+            currentProject={{
+              id: metadata.workspaceId,
+              name: `${metadata.title} [${activeSheetTab?.name || "Sheet 1"}]`,
+              slug: metadata.workspaceId,
+              website: currentWorkspace.website,
+              description: metadata.description || currentWorkspace.description,
+              filePath: `data/spreadsheets/${metadata.id}/tabs/${activeSheetId}.json`,
+              color: currentWorkspace.color,
+              badgeClass: currentWorkspace.badgeClass,
+              targetAudience: currentWorkspace.description,
+            }}
+            customToken={customToken}
+          />
+          {/* Bottom Tabs Bar */}
+          <SheetTabsBar
+            sheets={metadata.sheets}
+            activeSheetId={activeSheetId}
+            onSelectSheet={handleSelectSheetTab}
+            onAddSheet={handleAddSheetTab}
+            onRenameSheet={handleRenameSheetTab}
+            onDuplicateSheet={handleDuplicateSheetTab}
+            onDeleteSheet={handleDeleteSheetTab}
+            onReorderSheets={handleReorderSheets}
+            onExportSheetCsv={handleExportCurrentSheetCsv}
+            onExportEntireSpreadsheet={handleExportEntireSpreadsheet}
+            currentRole={currentRole}
+          />
+        </div>
       )}
 
       {/* CSV Import Modal */}
@@ -779,7 +1038,7 @@ export default function SpreadsheetEditorPage() {
           slug: metadata.workspaceId,
           website: currentWorkspace.website,
           description: metadata.description || currentWorkspace.description,
-          filePath: `data/spreadsheets/${metadata.id}/backlinks.json`,
+          filePath: `data/spreadsheets/${metadata.id}/tabs/${activeSheetId}.json`,
           color: currentWorkspace.color,
           badgeClass: currentWorkspace.badgeClass,
           targetAudience: currentWorkspace.description,
@@ -794,7 +1053,7 @@ export default function SpreadsheetEditorPage() {
             localStorage.removeItem("backlink_manager_gh_token");
             setIsGitHubConnected(false);
           }
-          loadSpreadsheet();
+          loadSpreadsheet(activeSheetId);
         }}
         isGitHubConnected={isGitHubConnected}
       />

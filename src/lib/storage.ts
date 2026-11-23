@@ -7,6 +7,7 @@ import {
   writeBacklinksToGitHub,
   getFileCommitHistory,
   getGitHubConfig,
+  isVercelProduction,
 } from "./github";
 
 export interface StorageResult {
@@ -18,6 +19,25 @@ export interface StorageResult {
 
 function getLocalFilePath(projectFilePath: string): string {
   return path.join(process.cwd(), projectFilePath);
+}
+
+/**
+ * Safely writes to local cache only in non-serverless environments.
+ * Strictly never attempts filesystem writes when running on Vercel.
+ */
+function tryWriteLocalCache(filePath: string, data: any): void {
+  if (isVercelProduction()) {
+    return;
+  }
+  try {
+    const dirname = path.dirname(filePath);
+    if (!fs.existsSync(dirname)) {
+      fs.mkdirSync(dirname, { recursive: true });
+    }
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not update local disk cache:", err);
+  }
 }
 
 /**
@@ -37,13 +57,8 @@ export async function getProjectBacklinks(
     try {
       const ghResult = await readBacklinksFromGitHub(project.filePath, tokenToUse);
       if (ghResult.data && ghResult.data.length > 0) {
-        // Update local file cache asynchronously
-        try {
-          ensureDirectoryExistence(localFile);
-          fs.writeFileSync(localFile, JSON.stringify(ghResult.data, null, 2), "utf-8");
-        } catch (e) {
-          console.warn("Could not write local cache:", e);
-        }
+        // Cache locally in local development environment
+        tryWriteLocalCache(localFile, ghResult.data);
         return {
           records: ghResult.data,
           sha: ghResult.sha,
@@ -55,7 +70,7 @@ export async function getProjectBacklinks(
     }
   }
 
-  // 2. Read from local file
+  // 2. Read from bundled/local file (read-only safe on Vercel)
   if (fs.existsSync(localFile)) {
     try {
       const raw = fs.readFileSync(localFile, "utf-8");
@@ -86,7 +101,8 @@ export async function getProjectBacklinks(
 }
 
 /**
- * Save backlinks for a project: writes to local file cache, and commits to GitHub if token configured
+ * Save backlinks for a project: writes to GitHub when token configured or in Vercel production.
+ * In local environment, updates local disk cache.
  */
 export async function saveProjectBacklinks(
   projectId: string,
@@ -100,9 +116,12 @@ export async function saveProjectBacklinks(
   const githubConfig = getGitHubConfig();
   const tokenToUse = customToken || githubConfig.token;
 
-  // Always write to local file first
-  ensureDirectoryExistence(localFile);
-  fs.writeFileSync(localFile, JSON.stringify(records, null, 2), "utf-8");
+  // In Vercel serverless environment, saving requires GitHub token
+  if (isVercelProduction() && !tokenToUse) {
+    throw new Error(
+      "GitHub Token required: Production persistence on Vercel requires GITHUB_TOKEN configured in your Vercel Project Environment Variables or entered in the Settings dialog."
+    );
+  }
 
   // If GitHub token is present, commit to GitHub
   if (tokenToUse) {
@@ -114,6 +133,8 @@ export async function saveProjectBacklinks(
         commitMessage,
         tokenToUse
       );
+      // Asynchronously update local cache if local dev
+      tryWriteLocalCache(localFile, records);
       return {
         success: true,
         sha: ghWrite.sha,
@@ -122,10 +143,12 @@ export async function saveProjectBacklinks(
       };
     } catch (error: any) {
       console.error("GitHub commit failed:", error.message);
-      // Return error to client so they know remote commit failed
       throw error;
     }
   }
+
+  // Local development fallback
+  tryWriteLocalCache(localFile, records);
 
   return {
     success: true,
@@ -141,11 +164,4 @@ export async function saveProjectBacklinks(
 export async function getProjectHistory(projectId: string, customToken?: string) {
   const project = getProjectConfig(projectId);
   return getFileCommitHistory(project.filePath, customToken);
-}
-
-function ensureDirectoryExistence(filePath: string) {
-  const dirname = path.dirname(filePath);
-  if (!fs.existsSync(dirname)) {
-    fs.mkdirSync(dirname, { recursive: true });
-  }
 }

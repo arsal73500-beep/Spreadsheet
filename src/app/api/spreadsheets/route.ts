@@ -6,6 +6,7 @@ import { hasPermission } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   try {
+    const { customToken } = getApiAuthContext(req);
     const { searchParams } = new URL(req.url);
     const workspaceId = searchParams.get("workspaceId") || undefined;
     const starred = searchParams.get("starred") === "true" ? true : undefined;
@@ -14,13 +15,16 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get("search") || undefined;
     const sortBy = (searchParams.get("sortBy") as any) || "updatedAt";
 
-    const spreadsheets = await listSpreadsheets({
-      workspaceId,
-      starred,
-      archived,
-      search,
-      sortBy,
-    });
+    const spreadsheets = await listSpreadsheets(
+      {
+        workspaceId,
+        starred,
+        archived,
+        search,
+        sortBy,
+      },
+      customToken
+    );
 
     return NextResponse.json({
       success: true,

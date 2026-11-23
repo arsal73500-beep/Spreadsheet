@@ -10,5 +10,14 @@
   "lastOpenedAt": "2026-11-23T20:32:44.891Z",
   "isStarred": true,
   "isArchived": false,
-  "recordCount": 2
+  "recordCount": 2,
+  "sheets": [
+    {
+      "id": "tab_main",
+      "name": "Sheet 1",
+      "order": 0,
+      "recordCount": 2
+    }
+  ],
+  "activeSheetId": "tab_main"
 }
