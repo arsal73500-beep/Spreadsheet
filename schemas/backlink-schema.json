@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BacklinkRecord",
+  "description": "Schema for a single backlink record in Backlink Manager",
+  "type": "object",
+  "required": [
+    "id",
+    "backlinkUrl",
+    "status",
+    "domain",
+    "category",
+    "dateAdded"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the backlink record"
+    },
+    "backlinkUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "The target backlink URL where the link exists or will exist"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "Pending",
+        "Submitted",
+        "Live",
+        "Rejected",
+        "Requires Verification",
+        "Not Available",
+        "Missing",
+        "Broken"
+      ],
+      "default": "Pending"
+    },
+    "account": {
+      "type": "string",
+      "description": "User account or email used to submit the backlink"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "Blog Comment",
+        "Business Directory",
+        "Local Directory",
+        "Guest Post",
+        "Forum",
+        "Business Profile",
+        "Organization Profile",
+        "Resource Page",
+        "Podcast",
+        "Interview",
+        "Social Profile",
+        "Community",
+        "Other"
+      ],
+      "default": "Other"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Root domain of the backlink (e.g., example.com)"
+    },
+    "dr": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Ahrefs Domain Rating (0-100)"
+    },
+    "da": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Moz Domain Authority (0-100)"
+    },
+    "organicTraffic": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Monthly organic search traffic estimate"
+    },
+    "trafficTrend": {
+      "type": "string",
+      "enum": ["up", "down", "stable", "unknown"],
+      "default": "unknown"
+    },
+    "domainRelevance": {
+      "type": "string",
+      "enum": ["High", "Medium", "Low"],
+      "default": "Medium"
+    },
+    "submissionUrl": {
+      "type": "string",
+      "description": "URL of the form or platform where the link was submitted"
+    },
+    "anchorText": {
+      "type": "string",
+      "description": "Anchor text used for the link"
+    },
+    "anchorCategory": {
+      "type": "string",
+      "enum": [
+        "Naked URL",
+        "Branded",
+        "Exact Match",
+        "Partial Match",
+        "Related Keyword",
+        "Generic"
+      ],
+      "default": "Generic"
+    },
+    "linkType": {
+      "type": "string",
+      "enum": [
+        "Dofollow",
+        "Nofollow",
+        "Sponsored",
+        "UGC",
+        "Unknown"
+      ],
+      "default": "Unknown"
+    },
+    "approvalDecision": {
+      "type": "string",
+      "enum": ["Approved", "Pending Review", "Rejected"],
+      "default": "Pending Review"
+    },
+    "dateAdded": {
+      "type": "string",
+      "description": "Date created in YYYY-MM-DD format"
+    },
+    "dateSubmitted": {
+      "type": ["string", "null"],
+      "description": "Date submitted in YYYY-MM-DD format"
+    },
+    "lastChecked": {
+      "type": ["string", "null"],
+      "description": "Date last checked in YYYY-MM-DD format"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional notes, instructions, or error messages"
+    }
+  }
+}
