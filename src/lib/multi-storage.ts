@@ -624,6 +624,28 @@ export async function saveSheetTabRecords(
 }
 
 /**
+ * Backwards-compatible save for entire spreadsheet root (saves to active tab)
+ */
+export async function saveSpreadsheetRecords(
+  spreadsheetId: string,
+  records: BacklinkRecord[],
+  baseSha?: string,
+  commitMessage?: string,
+  customToken?: string
+) {
+  const metadata = normalizeSpreadsheetMetadata(spreadsheetId);
+  const activeTabId = metadata.activeSheetId || metadata.sheets[0]?.id || "tab_main";
+  return saveSheetTabRecords(
+    spreadsheetId,
+    activeTabId,
+    records,
+    baseSha,
+    commitMessage,
+    customToken
+  );
+}
+
+/**
  * Add a new sheet tab to a spreadsheet
  */
 export async function addSheetTab(
@@ -731,12 +753,17 @@ export async function duplicateSheetTab(
     } catch {}
   }
 
-  return addSheetTab(
+  const result = await addSheetTab(
     spreadsheetId,
     `${target.name} (Copy)`,
     records,
     customToken
   );
+
+  return {
+    metadata: result.metadata,
+    clonedTab: result.newTab,
+  };
 }
 
 /**

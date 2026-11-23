@@ -6,9 +6,24 @@
   "owner": "Arsal Malik",
   "ownerEmail": "arsal73500@gmail.com",
   "createdAt": "2026-10-15T09:00:00.000Z",
-  "updatedAt": "2026-11-23T20:30:10.208Z",
+  "updatedAt": "2026-11-23T20:54:03.687Z",
   "isStarred": true,
   "isArchived": false,
-  "recordCount": 5,
-  "lastOpenedAt": "2026-11-23T20:37:17.857Z"
+  "recordCount": 6,
+  "lastOpenedAt": "2026-11-23T20:58:21.296Z",
+  "sheets": [
+    {
+      "id": "tab_1795467240664_gsdz",
+      "name": "Healthcare Outreach Prospects",
+      "order": 0,
+      "recordCount": 1
+    },
+    {
+      "id": "tab_main",
+      "name": "Verified Live Backlinks",
+      "order": 1,
+      "recordCount": 5
+    }
+  ],
+  "activeSheetId": "tab_1795467240664_gsdz"
 }

@@ -9,5 +9,14 @@
   "updatedAt": "2026-11-23T20:30:10.227Z",
   "isStarred": false,
   "isArchived": false,
-  "recordCount": 1
+  "recordCount": 1,
+  "sheets": [
+    {
+      "id": "tab_main",
+      "name": "Sheet 1",
+      "order": 0,
+      "recordCount": 1
+    }
+  ],
+  "activeSheetId": "tab_main"
 }

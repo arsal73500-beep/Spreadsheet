@@ -8,6 +8,10 @@ export interface GitHubStorageConfig {
   token?: string;
 }
 
+export function isVercelProduction(): boolean {
+  return process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined;
+}
+
 export function getGitHubConfig(): GitHubStorageConfig {
   return {
     owner: process.env.GITHUB_OWNER || "arsal73500-beep",
@@ -39,17 +43,17 @@ export interface WriteFileResult {
 }
 
 /**
- * Fetch file contents and SHA from GitHub repository
+ * Fetch and decode any JSON file directly from GitHub repository
  */
-export async function readBacklinksFromGitHub(
+export async function readJsonFromGitHub<T = any>(
   filePath: string,
   customToken?: string
-): Promise<ReadFileResult> {
+): Promise<{ data: T; sha: string } | null> {
   const octokit = getOctokitClient(customToken);
   const { owner, repo, branch } = getGitHubConfig();
 
   if (!octokit) {
-    throw new Error("GitHub token not configured on server.");
+    return null;
   }
 
   try {
@@ -64,32 +68,25 @@ export async function readBacklinksFromGitHub(
       const decoded = Buffer.from(response.data.content, "base64").toString("utf-8");
       const parsed = JSON.parse(decoded);
       return {
-        data: Array.isArray(parsed) ? parsed : [],
+        data: parsed as T,
         sha: response.data.sha,
-        source: "github",
       };
     }
-
-    throw new Error("Target file content format is invalid.");
+    return null;
   } catch (error: any) {
     if (error.status === 404) {
-      // File doesn't exist yet on GitHub
-      return {
-        data: [],
-        sha: "",
-        source: "github",
-      };
+      return null;
     }
     throw error;
   }
 }
 
 /**
- * Write updated records to GitHub repository with commit message and SHA conflict check
+ * Commit any JSON object to GitHub repository with SHA conflict check
  */
-export async function writeBacklinksToGitHub(
+export async function writeJsonToGitHub(
   filePath: string,
-  records: BacklinkRecord[],
+  data: any,
   currentSha?: string,
   commitMessage?: string,
   customToken?: string
@@ -98,17 +95,18 @@ export async function writeBacklinksToGitHub(
   const { owner, repo, branch } = getGitHubConfig();
 
   if (!octokit) {
-    throw new Error("GitHub token not configured on server.");
+    throw new Error(
+      "GitHub Personal Access Token (GITHUB_TOKEN) is not configured. Please add GITHUB_TOKEN in your Vercel Project Settings or Settings dialog."
+    );
   }
 
-  const jsonContent = JSON.stringify(records, null, 2);
+  const jsonContent = JSON.stringify(data, null, 2);
   const encodedContent = Buffer.from(jsonContent, "utf-8").toString("base64");
-  const defaultMessage = commitMessage || `chore(data): update ${filePath} [${records.length} records]`;
+  const defaultMessage = commitMessage || `chore(data): update ${filePath}`;
 
   try {
-    // If SHA is not provided, fetch current SHA from GitHub to verify
     let targetSha = currentSha;
-    if (!targetSha) {
+    if (!targetSha || targetSha.startsWith("local-")) {
       try {
         const existing = await octokit.rest.repos.getContent({
           owner,
@@ -123,6 +121,7 @@ export async function writeBacklinksToGitHub(
         if (err.status !== 404) {
           throw err;
         }
+        targetSha = undefined;
       }
     }
 
@@ -140,16 +139,135 @@ export async function writeBacklinksToGitHub(
       success: true,
       sha: response.data.content?.sha || "",
       commitUrl: response.data.commit?.html_url,
-      message: "Successfully committed changes to GitHub.",
+      message: "Successfully committed changes to GitHub repository.",
     };
   } catch (error: any) {
     if (error.status === 409) {
       throw new Error(
-        "Conflict detected: The file has been modified in the GitHub repository since your last read. Please refresh and merge changes."
+        "Conflict detected: The file in GitHub has been modified remotely. Please refresh to load the latest changes before overwriting."
       );
     }
     throw new Error(`GitHub commit failed: ${error.message || "Unknown error"}`);
   }
+}
+
+/**
+ * Delete a file in GitHub repository
+ */
+export async function deleteFileFromGitHub(
+  filePath: string,
+  currentSha?: string,
+  commitMessage?: string,
+  customToken?: string
+): Promise<boolean> {
+  const octokit = getOctokitClient(customToken);
+  const { owner, repo, branch } = getGitHubConfig();
+
+  if (!octokit) return false;
+
+  try {
+    let targetSha = currentSha;
+    if (!targetSha || targetSha.startsWith("local-")) {
+      const existing = await octokit.rest.repos.getContent({
+        owner,
+        repo,
+        path: filePath,
+        ref: branch,
+      });
+      if ("sha" in existing.data) {
+        targetSha = existing.data.sha;
+      }
+    }
+
+    if (!targetSha) return false;
+
+    await octokit.rest.repos.deleteFile({
+      owner,
+      repo,
+      path: filePath,
+      message: commitMessage || `chore(data): delete ${filePath}`,
+      sha: targetSha,
+      branch,
+    });
+
+    return true;
+  } catch (error) {
+    console.warn(`Could not delete ${filePath} from GitHub:`, error);
+    return false;
+  }
+}
+
+/**
+ * List files/directories in a path on GitHub
+ */
+export async function listDirectoryFromGitHub(
+  dirPath: string,
+  customToken?: string
+): Promise<{ name: string; path: string; type: "file" | "dir"; sha: string }[]> {
+  const octokit = getOctokitClient(customToken);
+  const { owner, repo, branch } = getGitHubConfig();
+
+  if (!octokit) return [];
+
+  try {
+    const response = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path: dirPath,
+      ref: branch,
+    });
+
+    if (Array.isArray(response.data)) {
+      return response.data.map((item) => ({
+        name: item.name,
+        path: item.path,
+        type: item.type as "file" | "dir",
+        sha: item.sha,
+      }));
+    }
+    return [];
+  } catch (error: any) {
+    if (error.status === 404) {
+      return [];
+    }
+    console.warn(`Failed to list GitHub directory ${dirPath}:`, error.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch backlink records from GitHub
+ */
+export async function readBacklinksFromGitHub(
+  filePath: string,
+  customToken?: string
+): Promise<ReadFileResult> {
+  const result = await readJsonFromGitHub<BacklinkRecord[]>(filePath, customToken);
+  if (result) {
+    return {
+      data: Array.isArray(result.data) ? result.data : [],
+      sha: result.sha,
+      source: "github",
+    };
+  }
+  return {
+    data: [],
+    sha: "",
+    source: "github",
+  };
+}
+
+/**
+ * Write updated backlink records to GitHub repository
+ */
+export async function writeBacklinksToGitHub(
+  filePath: string,
+  records: BacklinkRecord[],
+  currentSha?: string,
+  commitMessage?: string,
+  customToken?: string
+): Promise<WriteFileResult> {
+  return writeJsonToGitHub(filePath, records, currentSha, commitMessage, customToken);
 }
 
 /**
@@ -183,7 +301,6 @@ export async function getFileCommitHistory(
       url: item.html_url,
     }));
   } catch (error) {
-    console.error("Failed to fetch commit history:", error);
     return [];
   }
 }
